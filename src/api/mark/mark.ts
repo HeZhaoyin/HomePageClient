@@ -44,3 +44,11 @@ export function addMark(data: AddMarkInfo) {
     data: data,
   });
 }
+
+export function getMarkIconByURL(url: String) {
+  return request({
+    url: '/mark/getIcon',
+    method: 'GET',
+    params: { url: url }
+  })
+}

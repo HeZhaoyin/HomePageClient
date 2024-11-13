@@ -5,8 +5,14 @@
             <transition name="bounce" mode="out-in">
                 <!-- <div v-if="state.isUnLogin || !props.isLoginStatus" class="login-content login-result-info"> -->
                 <div v-if="!props.isLoginInputShow || state.isLogin" class="login-content login-result-info">
-                    <span class="user-name">未登录</span>
-                    <span class="user-desc">点我登录</span>
+                    <template v-if="!state.isLogin">
+                        <span class="user-name">未登录</span>
+                        <span class="user-desc">点我登录</span>
+                    </template>
+                    <template v-else-if="state.isLogin">
+                        <div :style="props.isLoginInputShow ? 'text-align: center' : ''" class="user-name">{{ state.userRealName }}</div>
+                        <div :style="props.isLoginInputShow ? 'text-align: center' : ''" class="user-desc">欢迎您</div>
+                    </template>
                 </div>
                 <div v-else class="login-content login-input-container">
                     <hp-input class="login-input" label="用户名" v-model="state.userName"
@@ -16,13 +22,13 @@
                     <div class="login-btn-container">
                         <login-button :status="state.loginStatus" @click="handleLogin" :text="state.loginText"
                             :success-text="'登录成功'" :fail-text="'登录失败'"></login-button>
-                        <login-button :text="'注册'" @click="handleRegister"></login-button>
+                        <!-- <login-button :text="'注册'" @click="handleRegister"></login-button> -->
                     </div>
                 </div>
             </transition>
         </div>
-        <login-button style="position:absolute;left:50%;bottom:20px;transform:translate(-50%,0)"
-            v-if="state.isLogin && props.isLoginInputShow" :text="'注销'"></login-button>
+        <login-button class="logout-btn" v-if="state.isLogin && props.isLoginInputShow" :text="'注销'"
+            @click="handleLogout"></login-button>
     </div>
 </template>
 
@@ -47,8 +53,17 @@ const state = reactive({
     userName: '',
     userPassword: '',
     isLogin: false,
-    userFullName: ''
+    userRealName: ''
 })
+
+const token = localStorage.getItem("token")
+if (token) {
+    state.isLogin = true;
+    const userData = JSON.parse(localStorage.getItem("userData") || '{}');
+    if (userData) {
+        state.userRealName = userData.userRealName;
+    }
+}
 
 const showLogin = () => {
     emit('show-or-hide-login', true)
@@ -73,8 +88,10 @@ const handleLogin = () => {
         console.log('成功')
         console.log(res)
         if (res.code == 200) {
-            localStorage.setItem('token', res.data.token)
-            store.commit('setToken', res.data.token)
+            localStorage.setItem('token', res.data.token);
+            localStorage.setItem('userData', JSON.stringify(res.data.userData));
+            state.userRealName = res.data.userData.userRealName;
+            store.commit('setToken', res.data.token);
             setTimeout(() => {
                 state.loginStatus = 'success'
                 setTimeout(() => {
@@ -104,6 +121,13 @@ const handleRegister = () => {
 
 const handleInputChange = () => {
     state.loginStatus = "normal"
+}
+
+const handleLogout = () => {
+    state.loginStatus = 'normal';
+    localStorage.removeItem('token');
+    store.commit('setToken', '');
+    state.isLogin = false;
 }
 </script>
 
@@ -160,7 +184,7 @@ const handleInputChange = () => {
     position: relative;
 
     .login-content {
-        position: absolute;
+        // position: absolute;
 
         .login-btn-container {
             margin-top: 40px;
@@ -200,5 +224,12 @@ const handleInputChange = () => {
     100% {
         transform: scale(1);
     }
+}
+
+.logout-btn {
+    position: absolute;
+    left: 50%;
+    bottom: 20px;
+    transform: translate(-50%, 0)
 }
 </style>
