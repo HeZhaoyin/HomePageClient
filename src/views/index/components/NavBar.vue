@@ -10,7 +10,7 @@
                 </template>
                 <div class="add-btn-list">
                     <div class="add-btn-item" @click="handleShowAddBtnClick">添加标签</div>
-                    <div class="add-btn-item">添加标签组</div>
+                    <!-- <div class="add-btn-item">添加标签组</div> -->
                 </div>
             </hp-popover>
             <!-- <hp-upload @change="fileChange"></hp-upload> -->
@@ -23,6 +23,9 @@
                 </hp-form-item>
                 <hp-form-item label-width="70" label="标签URL" :error="''">
                     <hp-input v-model="state.addMarkInfo.markUrl" />
+                </hp-form-item>
+                <hp-form-item label-width="70" label="" :error="''">
+                    <hp-button type="primary" @click="handleGetIconByURL">根据URL获取标签图标</hp-button>
                 </hp-form-item>
                 <hp-form-item label-width="70" label="标签图标" :error="''">
                     <hp-upload v-if="state.addMarkInfo.markIcon == ''" @change="fileChange"></hp-upload>
@@ -42,7 +45,7 @@
 
 <script lang="ts" setup>
 import { computed, reactive, watch } from "vue";
-import { uploadMarkIcon } from "../../../api/mark/mark"
+import { uploadMarkIcon, getMarkIconByURL } from "../../../api/mark/mark"
 import CardItem from "./CardItem.vue";
 import { MarkInfo, MarkGroupInfo } from "../../../models/mark"
 import { addMark, getMarkGroupWithoutLogin, getMarkGroup } from "../../../api/mark/mark"
@@ -94,7 +97,7 @@ const handleSubmitAddMark = () => {
         ...state.addMarkInfo,
         markGroupName: state.addMarkGroupName
     }).then(res => {
-        console.log(res)
+        store.dispatch('initMarkListData')
     })
 }
 
@@ -103,6 +106,9 @@ watch(() => store.state.token, (val) => {
     if (val) {
         getMarkGroup().then(res => {
             console.log(res)
+            res.data.forEach((item: MarkGroupInfo) => {
+                state.markGroupArr.push({ label: item.markGroupName, value: item.id?.toString() })
+            });
         })
     } else {
         getMarkGroupWithoutLogin().then(res => {
@@ -114,6 +120,16 @@ watch(() => store.state.token, (val) => {
         })
     }
 }, { immediate: true })
+
+const handleGetIconByURL = () => {
+    if (state.addMarkInfo.markUrl != '') {
+        getMarkIconByURL(state.addMarkInfo.markUrl).then(res => {
+            if (res.code === 200) {
+                state.addMarkInfo.markIcon = res.data
+            }
+        })
+    }
+}
 
 </script>
 

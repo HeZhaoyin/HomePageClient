@@ -8,7 +8,7 @@
         </Avatar>
         <TransitionGroup name="fade">
             <template v-if="!state.isLoginStatus">
-                <Card v-for="(markGroup, index) in state.markListData" :marks="markGroup.marks"
+                <Card v-for="(markGroup, index) in store.state.markListData as Array<MarkList>" :marks="markGroup.marks"
                     :mark-group-name="markGroup.markGroupName" class="main-container">
                 </Card>
             </template>
@@ -27,14 +27,12 @@
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import Avatar from './components/Avatar.vue'
 import Card from './components/Card.vue'
-import { getMarkWithoutLogin, getMark } from '../../api/mark/mark';
 import { useStore } from 'vuex'
 import { MarkList } from '../../models/mark'
 const state = reactive({
     isLoginStatus: false,
     loginAnimationReverse: false,
     isLoginInputShow: false,
-    markListData: [] as Array<MarkList>
 })
 
 const showOrHideLogin = (isShow: boolean) => {
@@ -53,21 +51,8 @@ const showOrHideLogin = (isShow: boolean) => {
 
 const store = useStore()
 watch(() => store.state.token, (val) => {
-    if (val) {
-        getMark().then(res => {
-            initMarkData(res.data)
-        })
-    } else {
-        getMarkWithoutLogin().then(res => {
-            initMarkData(res.data)
-        })
-    }
+    store.dispatch('initMarkListData')
 }, { immediate: true })
-
-const initMarkData = (markListData: Array<MarkList>) => {
-    state.markListData = markListData
-}
-
 
 defineExpose({
     ...toRefs(state)
@@ -88,7 +73,6 @@ defineExpose({
 
 .main-content-box {
     width: 100%;
-    min-height: 80vh;
     display: flex;
     flex-wrap: wrap;
     position: relative;
