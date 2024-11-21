@@ -28,11 +28,11 @@ const props = defineProps({
 <style lang="less" scoped>
 .card {
     min-width: 400px;
-    height: 250px;
+    height: 240px;
     background: radial-gradient(circle at 100% 0, hsla(0, 0%, 100%, .85) 0, hsla(0, 0%, 96.1%, .5) 183%);
     box-shadow: 17px 20px 40px rgb(0 0 0 / 21%);
     border-radius: 16px;
-    margin: 20px;
+    margin: 14px;
     cursor: pointer;
     transition: box-shadow .2s cubic-bezier(.32, .08, .24, 1), transform .2s cubic-bezier(.32, .08, .24, 1), -webkit-box-shadow .2s cubic-bezier(.32, .08, .24, 1), -webkit-transform .2s cubic-bezier(.32, .08, .24, 1);
 
@@ -46,7 +46,7 @@ const props = defineProps({
 
 .banner {
     border-radius: 16px 16px 0 0;
-    height: 50px;
+    height: 40px;
     background-color: rgba(248, 248, 252, .85);
     padding-left: 20px;
     font-size: 18px;

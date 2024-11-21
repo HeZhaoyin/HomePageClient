@@ -138,7 +138,7 @@ const handleLogout = () => {
     background: radial-gradient(circle at 100% 0, hsla(0, 0%, 100%, .85) 0, hsla(0, 0%, 96.1%, .5) 183%);
     box-shadow: 17px 20px 40px rgb(0 0 0 / 21%);
     border-radius: 16px;
-    margin: 20px;
+    margin: 14px;
     cursor: pointer;
     z-index: 2;
 
