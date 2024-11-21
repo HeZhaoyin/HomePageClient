@@ -13,13 +13,6 @@
                 </Card>
             </template>
         </TransitionGroup>
-
-        <!-- <a href="https://vitejs.dev" target="_blank">
-                    <img src="@/assets/vite.svg" class="logo" alt="Vite logo" />
-                </a>
-                <a href="https://vuejs.org/" target="_blank">
-                    <img src="@/assets/vue.svg" class="logo vue" alt="Vue logo" />
-                </a> -->
     </div>
 </template>
 
@@ -80,7 +73,7 @@ defineExpose({
 
 .user-box {
     width: 250px;
-    height: 250px;
+    height: 240px;
     padding: 20px;
     min-width: 0;
     transition: top .2s cubic-bezier(.32, .08, .24, 1), transform .2s cubic-bezier(.32, .08, .24, 1), left .2s cubic-bezier(.32, .08, .24, 1), width .2s ease, height .2s ease;
