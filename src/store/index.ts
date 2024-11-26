@@ -5,6 +5,7 @@ import { getMarkWithoutLogin, getMark } from '../api/mark/mark';
 interface State {
   token: string;
   markListData: Array<MarkList>;
+  isCardEditStatus: boolean,
 }
 
 export const store = createStore<State>({
@@ -12,6 +13,7 @@ export const store = createStore<State>({
     return {
       markListData: [] as Array<MarkList>,
       token: localStorage.getItem("token") || "",
+      isCardEditStatus: false as boolean,
     };
   },
   mutations: {
@@ -20,6 +22,9 @@ export const store = createStore<State>({
     },
     setMarkListData(state, data: Array<MarkList>) {
       state.markListData = data;
+    },
+    setEditStatus(state, status: boolean) {
+      state.isCardEditStatus = status;
     }
   },
   actions: {
