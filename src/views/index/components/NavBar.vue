@@ -131,7 +131,7 @@ const handleGetIconByURL = () => {
 }
 
 const handleChangeEditStatus = () => {
-  store.dispatch('setEditStatus', true)
+  store.commit('setEditStatus', true)
 }
 
 </script>

@@ -1,6 +1,6 @@
 <template>
     <div class="card">
-        <div class="banner">
+        <div class="banner" :class="{'banner-dragging': store.state.isCardEditStatus}">
             {{ props.markGroupName }}
         </div>
         <div class="card-content">
@@ -14,6 +14,7 @@
 import CardItem from './CardItem.vue';
 import { MarkItem } from '../../../models/mark';
 import { reactive } from 'vue';
+import { useStore } from 'vuex'
 const state = reactive({
 
 })
@@ -22,6 +23,8 @@ const props = defineProps({
     marks: Array<MarkItem>,
     markGroupName: String
 })
+
+const store = useStore()
 
 </script>
 
@@ -33,7 +36,6 @@ const props = defineProps({
     box-shadow: 17px 20px 40px rgb(0 0 0 / 21%);
     border-radius: 16px;
     margin: 14px;
-    cursor: pointer;
     transition: box-shadow .2s cubic-bezier(.32, .08, .24, 1), transform .2s cubic-bezier(.32, .08, .24, 1), -webkit-box-shadow .2s cubic-bezier(.32, .08, .24, 1), -webkit-transform .2s cubic-bezier(.32, .08, .24, 1);
 
     &:hover {
@@ -54,6 +56,9 @@ const props = defineProps({
     line-height: 25px;
     display: flex;
     align-items: center;
+    &.banner-dragging {
+        cursor: move;
+    }
 }
 
 .card-content {

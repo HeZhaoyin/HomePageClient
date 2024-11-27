@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="avatar-box-mask" v-if="state.isLoginStatus" @click.self="showOrHideLogin(false)"></div>
-    <VueDraggable ref="el" :disabled="true" :animation="150" ghostClass="ghost" class="main-content-box">
+    <VueDraggable ref="el" :disabled="!store.state.isCardEditStatus" :animation="150" class="main-content-box" v-model="store.state.markListData" handle=".banner">
       <Avatar class="user-box"
         :class="[{ 'show-login-box': state.isLoginStatus && !state.loginAnimationReverse }, { 'hide-login-box': state.loginAnimationReverse }]"
         :is-login-status="state.isLoginStatus" :is-login-input-show="state.isLoginInputShow"
