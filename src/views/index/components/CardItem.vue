@@ -37,7 +37,6 @@ const handleCardItemClick = () => {
 }
 
 .item-icon {
-    width: 60px;
     height: 60px;
     border-radius: 15px;
 }
