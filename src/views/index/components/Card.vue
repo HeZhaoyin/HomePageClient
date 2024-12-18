@@ -36,7 +36,7 @@ const store = useStore()
     box-shadow: 17px 20px 40px rgb(0 0 0 / 21%);
     border-radius: 16px;
     margin: 14px;
-    transition: box-shadow .2s cubic-bezier(.32, .08, .24, 1), transform .2s cubic-bezier(.32, .08, .24, 1), -webkit-box-shadow .2s cubic-bezier(.32, .08, .24, 1), -webkit-transform .2s cubic-bezier(.32, .08, .24, 1);
+    // transition: box-shadow .2s cubic-bezier(.32, .08, .24, 1), transform .2s cubic-bezier(.32, .08, .24, 1), -webkit-box-shadow .2s cubic-bezier(.32, .08, .24, 1), -webkit-transform .2s cubic-bezier(.32, .08, .24, 1);
 
     &:hover {
         -webkit-box-shadow: 20px 20px 41px rgb(10 10 10 / 32%);
