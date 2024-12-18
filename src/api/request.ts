@@ -1,6 +1,4 @@
 import axios, { AxiosRequestConfig, Method } from "axios";
-import { useStore } from 'vuex'
-const store = useStore()
 
 declare module "axios" {
   interface AxiosResponse<T = any> {
@@ -63,23 +61,17 @@ instance.interceptors.request.use(
 // 响应拦截
 instance.interceptors.response.use(
   (config) => {
-    console.log('进入了这里')
     if (
       config.status === 200 ||
       config.status === 201 ||
       config.status === 204
     ) {
-      console.log('进入了这里')
       return Promise.resolve(config.data);
     } else {
       return Promise.reject(config);
     }
   },
   (error) => {
-    if (error.response.status === 401) {
-      localStorage.removeItem('token');
-      store.commit('setToken', '');
-    }
     return Promise.reject(error.response);
   }
 );
