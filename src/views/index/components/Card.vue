@@ -1,26 +1,48 @@
 <template>
     <div class="card">
-        <div class="banner" :class="{'banner-dragging': store.isCardEditStatus}">
+        <div class="banner" :class="{ 'cursor-move': store.isCardEditStatus }">
             {{ props.markGroupName }}
         </div>
-        <div class="card-content">
-            <card-item v-for="mark in props.marks" :mark-icon="mark.markIcon" :mark-name="mark.markName"
-                :mark-url="mark.markUrl"></card-item>
-        </div>
+        <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" v-model="marksList" @start="onStart"
+            @update="onUpdate" @end="onEnd" ghostClass="ghost" class="card-content">
+            <card-item :class="{ 'cursor-move': store.isCardEditStatus }" v-for="mark in marksList"
+                :mark-icon="mark.markIcon" :mark-name="mark.markName" :mark-url="mark.markUrl"></card-item>
+        </VueDraggable>
     </div>
-</template> 
+</template>
 
 <script lang="ts" setup>
+import { ref, computed } from 'vue'
 import CardItem from './CardItem.vue';
 import { MarkItem } from '../../../models/mark';
 import { useStore } from '@/store/index'
+import {
+    type SortableEvent,
+    type UseDraggableReturn,
+    VueDraggable
+} from 'vue-draggable-plus'
 
 const props = defineProps({
     marks: Array<MarkItem>,
     markGroupName: String
 })
 
+const marksList = computed(() => props.marks || [])
+
 const store = useStore()
+
+const el = ref<UseDraggableReturn>()
+const onStart = (e: SortableEvent) => {
+    console.log('start', e)
+}
+
+const onEnd = (e: SortableEvent) => {
+    console.log('onEnd', e)
+}
+
+const onUpdate = () => {
+    console.log('update')
+}
 
 </script>
 
@@ -52,9 +74,10 @@ const store = useStore()
     line-height: 25px;
     display: flex;
     align-items: center;
-    &.banner-dragging {
-        cursor: move;
-    }
+}
+
+.cursor-move {
+    cursor: move;
 }
 
 .card-content {
