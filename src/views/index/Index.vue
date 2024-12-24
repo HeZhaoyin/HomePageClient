@@ -1,9 +1,8 @@
 <template>
   <div>
     <div class="avatar-box-mask" v-if="state.isLoginStatus" @click.self="showOrHideLogin(false)"></div>
-    <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" class="main-content-box"
-      v-model="state.cacheMarkListData" @start="onStart" @update="onUpdate" @end="onEnd" ghostClass="ghost"
-      filter=".user-box">
+    <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" v-model="state.cacheMarkListData"
+      @start="onStart" @update="onUpdate" @end="onEnd" ghostClass="ghost" filter=".user-box" class="main-content-box">
       <!-- <VueDraggable
       ref="el"
       v-model="state.cacheMarkListData"
@@ -18,13 +17,13 @@
         :is-login-status="state.isLoginStatus" :is-login-input-show="state.isLoginInputShow"
         @show-or-hide-login="showOrHideLogin">
       </Avatar>
-      <!-- <TransitionGroup name="fade">
-        <template v-if="!state.isLoginStatus"> -->
-      <Card v-for="markGroup in state.cacheMarkListData as Array<MarkList>" :marks="markGroup.marks"
-        :mark-group-name="markGroup.markGroupName" class="main-container" :key="markGroup.id">
-      </Card>
-      <!-- </template>
-</TransitionGroup> -->
+      <!-- <TransitionGroup name="fade"> -->
+      <template v-if="!state.isLoginStatus">
+        <Card v-for="markGroup in state.cacheMarkListData as Array<MarkList>" :marks="markGroup.marks"
+          :mark-group-name="markGroup.markGroupName" class="main-container" :key="markGroup.id">
+        </Card>
+      </template>
+      <!-- </TransitionGroup> -->
     </VueDraggable>
   </div>
 </template>

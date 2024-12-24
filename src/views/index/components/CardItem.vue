@@ -28,7 +28,7 @@ const handleCardItemClick = () => {
     justify-content: center;
     align-items: center;
     flex-direction: column;
-    transition: all linear .1s;
+    // transition: all linear .1s;
     cursor: pointer;
 
     &:hover {
