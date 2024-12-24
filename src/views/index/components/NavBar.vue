@@ -48,7 +48,8 @@ import { uploadMarkIcon, getMarkIconByURL } from "../../../api/mark/mark"
 import CardItem from "./CardItem.vue";
 import { MarkInfo, MarkGroupInfo } from "../../../models/mark"
 import { addMark, getMarkGroupWithoutLogin, getMarkGroup } from "../../../api/mark/mark"
-import { useStore } from 'vuex'
+import { useStore } from '@/store/index'
+const store = useStore();
 
 const state = reactive({
   isShowAddDialog: false,
@@ -96,12 +97,11 @@ const handleSubmitAddMark = () => {
     ...state.addMarkInfo,
     markGroupName: state.addMarkGroupName
   }).then(res => {
-    store.dispatch('initMarkListData')
+    store.initMarkListData();
   })
 }
 
-const store = useStore()
-watch(() => store.state.token, (val) => {
+watch(() => store.token, (val) => {
   if (val) {
     getMarkGroup().then(res => {
       console.log(res)
@@ -131,7 +131,7 @@ const handleGetIconByURL = () => {
 }
 
 const handleChangeEditStatus = () => {
-  store.commit('setEditStatus', true)
+  store.isCardEditStatus = true;
 }
 
 </script>

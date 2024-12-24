@@ -1,19 +1,30 @@
 <template>
   <div>
     <div class="avatar-box-mask" v-if="state.isLoginStatus" @click.self="showOrHideLogin(false)"></div>
-    <VueDraggable ref="el" :disabled="!store.state.isCardEditStatus" :animation="150" class="main-content-box" v-model="store.state.markListData" handle=".banner">
+    <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" class="main-content-box"
+      v-model="state.cacheMarkListData" @start="onStart" @update="onUpdate" @end="onEnd" ghostClass="ghost"
+      filter=".user-box">
+      <!-- <VueDraggable
+      ref="el"
+      v-model="state.cacheMarkListData"
+      :animation="150"
+      ghostClass="ghost"
+      @start="onStart"
+      @update="onUpdate"
+      @end="onEnd"
+    > -->
       <Avatar class="user-box"
         :class="[{ 'show-login-box': state.isLoginStatus && !state.loginAnimationReverse }, { 'hide-login-box': state.loginAnimationReverse }]"
         :is-login-status="state.isLoginStatus" :is-login-input-show="state.isLoginInputShow"
         @show-or-hide-login="showOrHideLogin">
       </Avatar>
-      <TransitionGroup name="fade">
-        <template v-if="!state.isLoginStatus">
-          <Card v-for="(markGroup, index) in store.state.markListData as Array<MarkList>" :marks="markGroup.marks"
-            :mark-group-name="markGroup.markGroupName" class="main-container">
-          </Card>
-        </template>
-      </TransitionGroup>
+      <!-- <TransitionGroup name="fade">
+        <template v-if="!state.isLoginStatus"> -->
+      <Card v-for="(markGroup, index) in state.cacheMarkListData as Array<MarkList>" :marks="markGroup.marks"
+        :mark-group-name="markGroup.markGroupName" class="main-container" :key="markGroup.id">
+      </Card>
+      <!-- </template>
+</TransitionGroup> -->
     </VueDraggable>
   </div>
 </template>
@@ -22,16 +33,20 @@
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import Avatar from './components/Avatar.vue'
 import Card from './components/Card.vue'
-import { useStore } from 'vuex'
+import { useStore } from '@/store/index'
 import { MarkList } from '../../models/mark'
 import {
+  type SortableEvent,
+  type UseDraggableReturn,
   VueDraggable
 } from 'vue-draggable-plus'
+const store = useStore()
 
 const state = reactive({
   isLoginStatus: false,
   loginAnimationReverse: false,
   isLoginInputShow: false,
+  cacheMarkListData: [],
 })
 
 const showOrHideLogin = (isShow: boolean) => {
@@ -48,14 +63,32 @@ const showOrHideLogin = (isShow: boolean) => {
   }
 }
 
-const store = useStore()
-watch(() => store.state.token, (val) => {
-  store.dispatch('initMarkListData')
+watch(() => store.token, (val) => {
+  store.initMarkListData();
 }, { immediate: true })
+watch(() => store.markListData, (val) => {
+  console.log('数据更新')
+  state.cacheMarkListData = JSON.parse(JSON.stringify(val))
+}, { deep: true })
 
 defineExpose({
   ...toRefs(state)
 })
+
+const el = ref<UseDraggableReturn>()
+
+const onStart = (e: SortableEvent) => {
+  console.log('start', e)
+}
+
+const onEnd = (e: SortableEvent) => {
+  console.log('onEnd', e)
+  console.log(state.cacheMarkListData)
+}
+
+const onUpdate = () => {
+  console.log('update')
+}
 
 </script>
 
