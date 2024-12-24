@@ -1,6 +1,6 @@
 <template>
     <div class="card">
-        <div class="banner" :class="{'banner-dragging': store.state.isCardEditStatus}">
+        <div class="banner" :class="{'banner-dragging': store.isCardEditStatus}">
             {{ props.markGroupName }}
         </div>
         <div class="card-content">
@@ -14,7 +14,7 @@
 import CardItem from './CardItem.vue';
 import { MarkItem } from '../../../models/mark';
 import { reactive } from 'vue';
-import { useStore } from 'vuex'
+import { useStore } from '@/store/index'
 const state = reactive({
 
 })

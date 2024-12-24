@@ -1,7 +1,7 @@
 <template>
-  <div class="main-content-box">
+  <div>
     <div class="avatar-box-mask" v-if="state.isLoginStatus" @click.self="showOrHideLogin(false)"></div>
-    <VueDraggable ref="el" :disabled="!store.state.isCardEditStatus" :animation="150"
+    <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" class="main-content-box"
       v-model="state.cacheMarkListData" @start="onStart" @update="onUpdate" @end="onEnd" ghostClass="ghost"
       filter=".user-box">
       <!-- <VueDraggable
@@ -33,13 +33,14 @@
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import Avatar from './components/Avatar.vue'
 import Card from './components/Card.vue'
-import { useStore } from 'vuex'
+import { useStore } from '@/store/index'
 import { MarkList } from '../../models/mark'
 import {
-  type DraggableEvent,
+  type SortableEvent,
   type UseDraggableReturn,
   VueDraggable
 } from 'vue-draggable-plus'
+const store = useStore()
 
 const state = reactive({
   isLoginStatus: false,
@@ -62,11 +63,10 @@ const showOrHideLogin = (isShow: boolean) => {
   }
 }
 
-const store = useStore()
-watch(() => store.state.token, (val) => {
-  store.dispatch('initMarkListData')
+watch(() => store.token, (val) => {
+  store.initMarkListData();
 }, { immediate: true })
-watch(() => store.state.markListData, (val) => {
+watch(() => store.markListData, (val) => {
   console.log('数据更新')
   state.cacheMarkListData = JSON.parse(JSON.stringify(val))
 }, { deep: true })
@@ -77,11 +77,11 @@ defineExpose({
 
 const el = ref<UseDraggableReturn>()
 
-const onStart = (e: DraggableEvent) => {
+const onStart = (e: SortableEvent) => {
   console.log('start', e)
 }
 
-const onEnd = (e: DraggableEvent) => {
+const onEnd = (e: SortableEvent) => {
   console.log('onEnd', e)
   console.log(state.cacheMarkListData)
 }

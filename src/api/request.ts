@@ -1,6 +1,5 @@
 import axios, { AxiosRequestConfig, Method } from "axios";
-import { useStore } from 'vuex'
-const store = useStore()
+import { useStore } from '@/store/index'
 
 declare module "axios" {
   interface AxiosResponse<T = any> {
@@ -78,7 +77,8 @@ instance.interceptors.response.use(
   (error) => {
     if (error.response.status === 401) {
       localStorage.removeItem('token');
-      store.commit('setToken', '');
+      const store = useStore()
+      store.token = "";
     }
     return Promise.reject(error.response);
   }

@@ -2,6 +2,7 @@ import { createApp, App as VueApp } from "vue";
 import "./assets/style/global.less";
 import router from "./router/index";
 import App from "./App.vue";
+import { createPinia } from 'pinia'; // 导入 Pinia
 import HpInput from "./components/HpInput.vue";
 import HpButton from "./components/HpButton.vue";
 import HpUpload from "./components/HpUpload.vue";
@@ -24,8 +25,10 @@ function registerComponents(app: VueApp<Element>) {
 
 try {
   const app = createApp(App);
+  const pinia = createPinia();
   registerComponents(app);
   app.use(router);
+  app.use(pinia);
 
   if (document.getElementById("app")) {
     app.mount("#app");

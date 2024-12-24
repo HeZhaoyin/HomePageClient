@@ -36,8 +36,8 @@
 import LoginButton from './LoginButton.vue';
 import { reactive, watch } from 'vue';
 import { login, register } from '../../../api/user/user';
-import { trim } from '../../../utils/utils'
-import { useStore } from 'vuex'
+import { trim } from '@/utils/utils'
+import { useStore } from '@/store/index'
 const emit = defineEmits(['show-or-hide-login'])
 const store = useStore()
 
@@ -91,7 +91,7 @@ const handleLogin = () => {
             localStorage.setItem('token', res.data.token);
             localStorage.setItem('userData', JSON.stringify(res.data.userData));
             state.userRealName = res.data.userData.userRealName;
-            store.commit('setToken', res.data.token);
+            store.token = res.data.token;
             setTimeout(() => {
                 state.loginStatus = 'success'
                 setTimeout(() => {
@@ -126,7 +126,7 @@ const handleInputChange = () => {
 const handleLogout = () => {
     state.loginStatus = 'normal';
     localStorage.removeItem('token');
-    store.commit('setToken', '');
+    store.token = "";
     state.isLogin = false;
 }
 </script>
