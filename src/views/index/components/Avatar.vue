@@ -35,7 +35,7 @@
 <script lang="ts" setup>
 import LoginButton from './LoginButton.vue';
 import { reactive } from 'vue';
-import { login, register } from '../../../api/user/user';
+import { login } from '../../../api/user/user';
 import { trim } from '@/utils/utils'
 import { useStore } from '@/store/index'
 const emit = defineEmits(['show-or-hide-login'])
