@@ -96,7 +96,7 @@ const handleSubmitAddMark = () => {
   addMark({
     ...state.addMarkInfo,
     markGroupName: state.addMarkGroupName
-  }).then(res => {
+  }).then(() => {
     store.initMarkListData();
   })
 }
