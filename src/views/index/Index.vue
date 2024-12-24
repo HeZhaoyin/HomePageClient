@@ -20,7 +20,7 @@
       </Avatar>
       <!-- <TransitionGroup name="fade">
         <template v-if="!state.isLoginStatus"> -->
-      <Card v-for="(markGroup, index) in state.cacheMarkListData as Array<MarkList>" :marks="markGroup.marks"
+      <Card v-for="markGroup in state.cacheMarkListData as Array<MarkList>" :marks="markGroup.marks"
         :mark-group-name="markGroup.markGroupName" class="main-container" :key="markGroup.id">
       </Card>
       <!-- </template>
@@ -30,7 +30,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, reactive, ref, toRefs, watch } from 'vue'
+import { reactive, ref, toRefs, watch } from 'vue'
 import Avatar from './components/Avatar.vue'
 import Card from './components/Card.vue'
 import { useStore } from '@/store/index'
@@ -63,7 +63,7 @@ const showOrHideLogin = (isShow: boolean) => {
   }
 }
 
-watch(() => store.token, (val) => {
+watch(() => store.token, () => {
   store.initMarkListData();
 }, { immediate: true })
 watch(() => store.markListData, (val) => {

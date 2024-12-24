@@ -34,7 +34,7 @@
 
 <script lang="ts" setup>
 import LoginButton from './LoginButton.vue';
-import { reactive, watch } from 'vue';
+import { reactive } from 'vue';
 import { login, register } from '../../../api/user/user';
 import { trim } from '@/utils/utils'
 import { useStore } from '@/store/index'
@@ -112,12 +112,12 @@ const handleLogin = () => {
     })
 }
 
-const handleRegister = () => {
-    if (!checkUserNameOrPassword()) {
-        return
-    }
-    register({ userName: state.userName, password: state.userPassword })
-}
+// const handleRegister = () => {
+//     if (!checkUserNameOrPassword()) {
+//         return
+//     }
+//     register({ userName: state.userName, password: state.userPassword })
+// }
 
 const handleInputChange = () => {
     state.loginStatus = "normal"

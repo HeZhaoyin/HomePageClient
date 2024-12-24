@@ -13,11 +13,7 @@
 <script lang="ts" setup>
 import CardItem from './CardItem.vue';
 import { MarkItem } from '../../../models/mark';
-import { reactive } from 'vue';
 import { useStore } from '@/store/index'
-const state = reactive({
-
-})
 
 const props = defineProps({
     marks: Array<MarkItem>,
