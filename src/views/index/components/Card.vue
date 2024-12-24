@@ -3,7 +3,7 @@
         <div class="banner" :class="{ 'cursor-move': store.isCardEditStatus }">
             {{ props.markGroupName }}
         </div>
-        <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" v-model="marksList" @start="onStart"
+        <VueDraggable group="card" ref="el" :disabled="!store.isCardEditStatus" :animation="150" v-model="marksList" @start="onStart"
             @update="onUpdate" @end="onEnd" ghostClass="ghost" class="card-content">
             <card-item :class="{ 'cursor-move': store.isCardEditStatus }" v-for="mark in marksList"
                 :mark-icon="mark.markIcon" :mark-name="mark.markName" :mark-url="mark.markUrl"></card-item>

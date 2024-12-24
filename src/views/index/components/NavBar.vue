@@ -131,7 +131,7 @@ const handleGetIconByURL = () => {
 }
 
 const handleChangeEditStatus = () => {
-  store.isCardEditStatus = true;
+  store.isCardEditStatus = !store.isCardEditStatus;
 }
 
 </script>
