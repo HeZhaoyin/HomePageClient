@@ -6,10 +6,7 @@
 </template>
   
 <script setup lang="ts">
-import { ref, onMounted, Ref } from 'vue';
-import { uploadMarkIcon } from "../api/mark/mark"
-import axios from 'axios';
-
+import { ref, Ref } from 'vue';
 const fileInput: Ref<HTMLInputElement | null> = ref(null);
 const emit: { (event: "change", file: File | undefined): void } = defineEmits(["change"]);
 

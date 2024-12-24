@@ -10,7 +10,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, defineComponent, PropType, ref } from 'vue';
+import { computed } from 'vue';
 
 const props = withDefaults(defineProps<{
     text?: string,
