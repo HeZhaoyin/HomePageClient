@@ -1,7 +1,6 @@
 <template>
   <div class="nav-bar">
     <div class="operate-container">
-      <!-- <hp-button type="danger">我是按钮</hp-button> -->
       <hp-popover>
         <template #reference>
           <!-- <span class="iconfont icon-tianjia add-btn" @click="handleShowAddBtnClick"></span> -->
@@ -10,10 +9,14 @@
         </template>
         <div class="add-btn-list">
           <div class="add-btn-item" @click="handleShowAddBtnClick">添加标签</div>
-          <div class="add-btn-item" @click="handleChangeEditStatus">切换编辑状态</div>
+          <div class="add-btn-item" @click="handleChangeEditStatus">编辑卡片位置</div>
         </div>
       </hp-popover>
       <!-- <hp-upload @change="fileChange"></hp-upload> -->
+    </div>
+    <div class="editing-btn-container" v-if="store.isCardEditStatus">
+      <hp-button class="editing-btn" type="success" @click="handleConfirmEditing">保存位置</hp-button>
+      <hp-button class="editing-btn" type="danger" @click="handleCancelEditing">取消编辑</hp-button>
     </div>
     <hp-dialog title="添加标签" v-model="state.isShowAddDialog" @cancel="handleAddDialogCancal"
       @confirm="handleSubmitAddMark">
@@ -29,7 +32,7 @@
         </hp-form-item>
         <hp-form-item label-width="70" label="标签图标" :error="''">
           <hp-upload v-if="state.addMarkInfo.markIcon == ''" @change="fileChange"></hp-upload>
-          <card-item v-else :mark-icon="state.addMarkInfo.markIcon" :mark-name="state.addMarkInfo.markName"></card-item>
+          <mark-item v-else :mark-icon="state.addMarkInfo.markIcon" :mark-name="state.addMarkInfo.markName"></mark-item>
         </hp-form-item>
         <hp-form-item label-width="70" label="标签组" :error="''">
           <hp-select v-model="state.addMarkInfo.markGroupId" :options="showGroupArr"></hp-select>
@@ -45,7 +48,7 @@
 <script lang="ts" setup>
 import { computed, reactive, watch } from "vue";
 import { uploadMarkIcon, getMarkIconByURL } from "../../../api/mark/mark"
-import CardItem from "./CardItem.vue";
+import MarkItem from "../cardType/MarkItem.vue";
 import { MarkInfo, MarkGroupInfo } from "../../../models/mark"
 import { addMark, getMarkGroupWithoutLogin, getMarkGroup } from "../../../api/mark/mark"
 import { useStore } from '@/store/index'
@@ -131,7 +134,15 @@ const handleGetIconByURL = () => {
 }
 
 const handleChangeEditStatus = () => {
-  store.isCardEditStatus = !store.isCardEditStatus;
+  store.isCardEditStatus = true;
+}
+
+const handleConfirmEditing = () => {
+
+}
+
+const handleCancelEditing = () => {
+  store.isCardEditStatus = false;
 }
 
 </script>
@@ -167,10 +178,23 @@ const handleChangeEditStatus = () => {
       }
     }
   }
+
+  .editing-btn-container {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    .editing-btn {
+      height: 34px;
+      margin: 0 10px;
+    }
+  }
 }
 
 .add-btn-list {
-  width: 90px;
+  width: 100px;
+  text-align: right;
 
   .add-btn-item {
     padding: 5px;

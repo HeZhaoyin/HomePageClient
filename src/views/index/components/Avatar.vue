@@ -66,6 +66,10 @@ if (token) {
 }
 
 const showLogin = () => {
+    // 如果已经登录或者正在编辑卡片，不显示登录框
+    if (props.isLoginStatus || store.isCardEditStatus) {
+        return;
+    }
     emit('show-or-hide-login', true)
 }
 

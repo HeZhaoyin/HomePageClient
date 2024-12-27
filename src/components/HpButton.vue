@@ -33,7 +33,9 @@ const handleClick = (event: Event) => {
 
 <style scoped lang="less">
 .hp-button {
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 15px;
   font-size: 14px;
   border: 1px solid;
