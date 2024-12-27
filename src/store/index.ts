@@ -13,13 +13,20 @@ export const useStore = defineStore('index', {
   },
   actions: {
     initMarkListData() {
+      const avatarCardItem = {
+        id: 'avatar',
+        markGroupName: '头像',
+        sort: 0,
+        type: 'Avatar',
+      }
+
       if (this.token) {
         getMark().then(res => {
-          this.markListData = res.data;
+          this.markListData = [avatarCardItem, ...res.data];
         })
       } else {
         getMarkWithoutLogin().then(res => {
-          this.markListData = res.data;
+          this.markListData = [avatarCardItem, ...res.data];
         })
       }
     }

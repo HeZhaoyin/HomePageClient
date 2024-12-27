@@ -19,18 +19,23 @@ export interface MarkGroupInfo {
   id?: string | number;
   markGroupName: string;
   userId: string | number;
+  sort: number;
+  type: string;
 }
 
-export interface MarkItem {
+export interface IMarkItem {
   id: string | number;
   markIcon: string;
   markName: string;
   markUrl: string;
+  sort: number;
 }
 
 export interface MarkList {
   id: string | number;
   markGroupName: string;
   userId: string | number;
-  marks: Array<MarkItem>;
+  marks: Array<IMarkItem>;
+  sort: number;
+  type: string;
 }
