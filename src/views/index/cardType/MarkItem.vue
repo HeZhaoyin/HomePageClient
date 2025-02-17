@@ -14,7 +14,7 @@ const props = defineProps({
 
 const handleCardItemClick = () => {
     if (props.markUrl) {
-        window.open(props.markUrl)
+        window.location.href = props.markUrl;
     }
 }
 </script>
