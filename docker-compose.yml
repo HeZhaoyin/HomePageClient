@@ -2,5 +2,6 @@ services:
   home-page-client:
     container_name: home-page-client
     image: home-page-client:latest  # 替换为你的 Docker 镜像名称和标签
+    restart: always
     ports:
       - "2333:80"
