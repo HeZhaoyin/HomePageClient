@@ -51,6 +51,7 @@ import { uploadMarkIcon, getMarkIconByURL, updateSort, addMark, getMarkGroupWith
 import MarkItem from "../cardType/MarkItem.vue";
 import { MarkInfo, MarkGroupInfo } from "../../../models/mark"
 import { useStore } from '@/store/index'
+import toast from '@/utils/toast'
 const store = useStore();
 
 const state = reactive({
@@ -98,8 +99,13 @@ const handleSubmitAddMark = () => {
   addMark({
     ...state.addMarkInfo,
     markGroupName: state.addMarkGroupName
-  }).then(() => {
-    store.initMarkListData();
+  }).then(res => {
+    if (res?.code === 200) {
+      store.initMarkListData();
+      toast.success('已添加标签')
+    } else {
+      toast.error('添加失败，请重试')
+    }
   })
 }
 
@@ -139,16 +145,18 @@ const handleChangeEditStatus = () => {
 const handleConfirmEditing = async () => {
   // 未登录无法保存（保存接口需 JWT）
   if (!store.token) {
-    alert('保存卡片位置需要登录，请先在头像卡片登录')
+    toast.error('保存卡片位置需要登录，请先在头像卡片登录')
     return
   }
   const payload = store.buildSortPayload()
   const res = await updateSort(payload)
   if (res?.code === 200) {
-    // 保存成功后用服务端顺序回拉一次，保持本地与服务端一致
+    // 保存成功：提示 + 用服务端顺序回拉 + 退出编辑态
     store.initMarkListData()
+    store.isCardEditStatus = false
+    toast.success('保存成功')
   } else {
-    alert('保存失败，请重试')
+    toast.error('保存失败，请重试')
   }
 }
 
