@@ -22,16 +22,23 @@
         <mark-group v-if="!props.isLoginStatus && props.type === 'MarkGroup'" :marks="cardData.marks"
           :mark-group-name="cardData.markGroupName" :key="cardData.id"></mark-group>
       </TransitionGroup>
+      <!-- 删除标签组确认弹窗 -->
+      <hp-dialog :title="'删除标签组'" v-model="delConfirm.show" @cancel="delConfirm.show = false"
+        @confirm="confirmDelMarkGroup">
+        <div>确定删除标签组「{{ delConfirm.name }}」及其中的所有标签吗？此操作不可撤销。</div>
+      </hp-dialog>
     </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { PropType } from 'vue'
+import { PropType, reactive } from 'vue'
 import Avatar from './Avatar.vue'
 import MarkGroup from '../cardType/MarkGroup.vue';
 import { MarkList } from '@/models/mark'
 import { useStore } from '@/store/index'
+import { deleteMarkGroup } from '@/api/mark/mark'
+import HpDialog from '@/components/HpDialog.vue'
 const store = useStore()
 
 const emit = defineEmits(['show-or-hide-login'])
@@ -54,8 +61,24 @@ const props = defineProps({
   }
 });
 
+const delConfirm = reactive({
+  show: false,
+  id: 0,
+  name: '',
+})
+
 const handleDelMarkGroup = () => {
-  console.log(props.cardData.id)
+  delConfirm.show = true
+  delConfirm.id = Number(props.cardData.id)
+  delConfirm.name = props.cardData.markGroupName || '该标签组'
+}
+
+const confirmDelMarkGroup = async () => {
+  const res = await deleteMarkGroup({ markGroupId: delConfirm.id })
+  if (res?.code === 200) {
+    delConfirm.show = false
+    store.initMarkListData()
+  }
 }
 
 </script>

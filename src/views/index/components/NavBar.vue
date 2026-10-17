@@ -47,10 +47,9 @@
 
 <script lang="ts" setup>
 import { computed, reactive, watch } from "vue";
-import { uploadMarkIcon, getMarkIconByURL } from "../../../api/mark/mark"
+import { uploadMarkIcon, getMarkIconByURL, updateSort, addMark, getMarkGroupWithoutLogin, getMarkGroup } from "../../../api/mark/mark"
 import MarkItem from "../cardType/MarkItem.vue";
 import { MarkInfo, MarkGroupInfo } from "../../../models/mark"
-import { addMark, getMarkGroupWithoutLogin, getMarkGroup } from "../../../api/mark/mark"
 import { useStore } from '@/store/index'
 const store = useStore();
 
@@ -137,8 +136,20 @@ const handleChangeEditStatus = () => {
   store.isCardEditStatus = true;
 }
 
-const handleConfirmEditing = () => {
-
+const handleConfirmEditing = async () => {
+  // 未登录无法保存（保存接口需 JWT）
+  if (!store.token) {
+    alert('保存卡片位置需要登录，请先在头像卡片登录')
+    return
+  }
+  const payload = store.buildSortPayload()
+  const res = await updateSort(payload)
+  if (res?.code === 200) {
+    // 保存成功后用服务端顺序回拉一次，保持本地与服务端一致
+    store.initMarkListData()
+  } else {
+    alert('保存失败，请重试')
+  }
 }
 
 const handleCancelEditing = () => {
