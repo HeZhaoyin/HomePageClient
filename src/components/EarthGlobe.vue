@@ -27,40 +27,71 @@ const EARTH_TEXTURE_RAW =
 
 let disposed = false
 
+// 动态注入 <script> 的节点存模块级数组保引用（防 GC）
+const pendingScripts: HTMLScriptElement[] = []
+// 已发起加载的 src 集合（防重复注入同一个 CDN）
+const loadedScripts = new Set<string>()
+
 // ---- 贴图：下载 → 1K 缩放 → 得一张 1024x512 的 JPEG dataURL ----
+// 关键：canvas 缩放失败时不能让整个 boot reject（会导致整地球降级）。
+// 回退策略：缩放失败就**直接用原始 2K 贴图 URL**（TextureLoader 走 <img> 加载，
+// 不受 CORS 限制，2K 也比降级成 CSS 好）。
 async function loadEarthTexture1k(): Promise<string> {
-  const resp = await fetch(EARTH_TEXTURE_RAW)
-  if (!resp.ok) throw new Error('texture fetch ' + resp.status)
-  const blob = await resp.blob()
-  const bmp = await createImageBitmap(blob)
-  const scale = 1024 / bmp.width
-  const off = document.createElement('canvas')
-  off.width = 1024
-  off.height = Math.max(1, Math.round(bmp.height * scale))
-  off.getContext('2d')!.drawImage(bmp as CanvasImageSource, 0, 0, off.width, off.height)
-  bmp.close?.()
-  return off.toDataURL('image/jpeg', 0.85)
+  try {
+    const resp = await fetch(EARTH_TEXTURE_RAW)
+    if (!resp.ok) throw new Error('texture fetch ' + resp.status)
+    const blob = await resp.blob()
+    const bmp = await createImageBitmap(blob)
+    const scale = 1024 / bmp.width
+    const off = document.createElement('canvas')
+    off.width = 1024
+    off.height = Math.max(1, Math.round(bmp.height * scale))
+    off.getContext('2d')!.drawImage(bmp as CanvasImageSource, 0, 0, off.width, off.height)
+    bmp.close?.()
+    const dataUrl = off.toDataURL('image/jpeg', 0.85)
+    return dataUrl
+  } catch (e) {
+    // 缩放/canvas 失败 → 直接用原始 2K 贴图 URL（img 加载不受 CORS 限制）
+    console.warn('[EarthGlobe] 贴图 1K 缩放失败，回退用原始 2K 贴图 URL', e)
+    return EARTH_TEXTURE_RAW
+  }
 }
 
 // ---- three.js：优先国内 CDN，失败回退 jsDelivr；成功则挂到 window.THREE 复用 ----
 // 注意：script 节点必须存到模块级数组里保引用，否则 inject 函数返回后局部变量 s
 // 失去引用、脚本节点会被 GC/清出 DOM，onload 永不触发 → 静默降级（无报错）。
-const pendingScripts: HTMLScriptElement[] = []
-
 async function loadThree(): Promise<any> {
   const windowAny = window as any
   if (windowAny.THREE) return windowAny.THREE
   const inject = (src: string) =>
     new Promise<any>((resolve, reject) => {
+      if (loadedScripts.has(src)) {
+        // 该 src 已在加载/已加载完成：轮询等 window.THREE 就绪（防重复注入）
+        const t0 = Date.now()
+        const poll = () => {
+          if ((window as any).THREE) return resolve((window as any).THREE)
+          if (Date.now() - t0 > 20000) return reject(new Error('three.js poll timeout ' + src))
+          setTimeout(poll, 200)
+        }
+        poll()
+        return
+      }
+      loadedScripts.add(src)
       const s = document.createElement('script')
       s.src = src
       s.async = true
       s.onload = () => {
         const t = (window as any).THREE
         if (t) resolve(t)
-        else reject(new Error('three.js loaded but window.THREE missing'))
+        else {
+          loadedScripts.delete(src)
+          reject(new Error('three.js loaded but window.THREE missing'))
+        }
       }
-      s.onerror = () => reject(new Error('cdn fail ' + src))
+      s.onerror = () => {
+        loadedScripts.delete(src)
+        reject(new Error('cdn fail ' + src))
+      }
       pendingScripts.push(s) // 保持引用，防节点被 GC
       document.head.appendChild(s)
     })
