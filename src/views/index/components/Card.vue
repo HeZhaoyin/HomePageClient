@@ -39,6 +39,7 @@ import { MarkList } from '@/models/mark'
 import { useStore } from '@/store/index'
 import { deleteMarkGroup } from '@/api/mark/mark'
 import HpDialog from '@/components/HpDialog.vue'
+import toast from '@/utils/toast'
 const store = useStore()
 
 const emit = defineEmits(['show-or-hide-login'])
@@ -78,6 +79,10 @@ const confirmDelMarkGroup = async () => {
   if (res?.code === 200) {
     delConfirm.show = false
     store.initMarkListData()
+    toast.success('已删除标签组')
+  } else {
+    delConfirm.show = false
+    toast.error('删除失败，请重试')
   }
 }
 

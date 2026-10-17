@@ -7,6 +7,7 @@ import NavBar from './views/index/components/NavBar.vue'
     <nav-bar></nav-bar>
     <router-view></router-view>
     <div class="bg"></div>
+    <hp-toast></hp-toast>
   </div>
 </template>
 

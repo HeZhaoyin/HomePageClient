@@ -11,6 +11,7 @@ import HpPopover from "./components/HpPopover.vue";
 import HpForm from "./components/HpForm.vue";
 import HpFormItem from "./components/HpFormItem.vue";
 import HpSelect from "./components/HpSelect.vue";
+import HpToast from "./components/HpToast.vue";
 
 function registerComponents(app: VueApp<Element>) {
   app.component("HpInput", HpInput);
@@ -21,6 +22,7 @@ function registerComponents(app: VueApp<Element>) {
   app.component("HpForm", HpForm);
   app.component("HpFormItem", HpFormItem);
   app.component("HpSelect", HpSelect);
+  app.component("HpToast", HpToast);
 }
 
 try {
