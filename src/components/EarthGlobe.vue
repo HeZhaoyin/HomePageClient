@@ -43,6 +43,10 @@ async function loadEarthTexture1k(): Promise<string> {
 }
 
 // ---- three.js：优先国内 CDN，失败回退 jsDelivr；成功则挂到 window.THREE 复用 ----
+// 注意：script 节点必须存到模块级数组里保引用，否则 inject 函数返回后局部变量 s
+// 失去引用、脚本节点会被 GC/清出 DOM，onload 永不触发 → 静默降级（无报错）。
+const pendingScripts: HTMLScriptElement[] = []
+
 async function loadThree(): Promise<any> {
   const windowAny = window as any
   if (windowAny.THREE) return windowAny.THREE
@@ -50,8 +54,14 @@ async function loadThree(): Promise<any> {
     new Promise<any>((resolve, reject) => {
       const s = document.createElement('script')
       s.src = src
-      s.onload = () => resolve((window as any).THREE)
+      s.async = true
+      s.onload = () => {
+        const t = (window as any).THREE
+        if (t) resolve(t)
+        else reject(new Error('three.js loaded but window.THREE missing'))
+      }
       s.onerror = () => reject(new Error('cdn fail ' + src))
+      pendingScripts.push(s) // 保持引用，防节点被 GC
       document.head.appendChild(s)
     })
   try {
