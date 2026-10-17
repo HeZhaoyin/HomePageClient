@@ -39,3 +39,16 @@ export interface MarkList {
   sort: number;
   type: string;
 }
+
+// 保存卡片位置的入参
+export interface UpdateSortParams {
+  // 当前用户所有标签组 id 的展示顺序
+  markGroupOrder: number[];
+  // 每个标签组内标签 id 的顺序，键为标签组 id
+  markOrder: Record<string, number[]>;
+}
+
+// 删除标签组入参
+export interface MarkGroupDeleteParams {
+  markGroupId: number;
+}

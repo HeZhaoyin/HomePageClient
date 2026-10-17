@@ -32,8 +32,8 @@ watch(() => store.token, () => {
   store.initMarkListData();
 }, { immediate: true })
 watch(() => store.markListData, (val) => {
-  console.log('数据更新')
   state.cacheMarkListData = JSON.parse(JSON.stringify(val))
+  store.setCacheMarkListData(state.cacheMarkListData)
 }, { deep: true })
 
 defineExpose({
@@ -48,7 +48,8 @@ const onStart = (e: SortableEvent) => {
 
 const onEnd = (e: SortableEvent) => {
   console.log('onEnd', e)
-  console.log(state.cacheMarkListData)
+  // 拖拽结束：把当前显示顺序写回 store，供 NavBar「保存位置」持久化
+  store.setCacheMarkListData(state.cacheMarkListData)
 }
 
 const onUpdate = () => {

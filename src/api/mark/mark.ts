@@ -1,5 +1,5 @@
 import request from "../request";
-import { AddMarkInfo } from "../../models/mark";
+import { AddMarkInfo, UpdateSortParams, MarkGroupDeleteParams } from "../../models/mark";
 
 export function getMarkWithoutLogin() {
   return request({
@@ -51,4 +51,22 @@ export function getMarkIconByURL(url: String) {
     method: 'GET',
     params: { url: url }
   })
+}
+
+// 保存卡片位置（标签组顺序 + 组内标签顺序）
+export function updateSort(data: UpdateSortParams) {
+  return request({
+    url: "/mark/updateSort",
+    method: "POST",
+    data: data,
+  });
+}
+
+// 删除标签组（级联删除组内标签）
+export function deleteMarkGroup(data: MarkGroupDeleteParams) {
+  return request({
+    url: "/mark/deleteMarkGroup",
+    method: "POST",
+    data: data,
+  });
 }

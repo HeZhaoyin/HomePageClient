@@ -4,13 +4,13 @@
         <div class="login-content-container">
             <transition name="bounce" mode="out-in">
                 <!-- <div v-if="state.isUnLogin || !props.isLoginStatus" class="login-content login-result-info"> -->
-                <div v-if="!props.isLoginInputShow || state.isLogin" class="login-content login-result-info">
-                    <template v-if="!state.isLogin">
+                <div v-if="!props.isLoginInputShow || userStore.isLogin" class="login-content login-result-info">
+                    <template v-if="!userStore.isLogin">
                         <span class="user-name">未登录</span>
                         <span class="user-desc">点我登录</span>
                     </template>
-                    <template v-else-if="state.isLogin">
-                        <div :style="props.isLoginInputShow ? 'text-align: center' : ''" class="user-name">{{ state.userRealName }}</div>
+                    <template v-else-if="userStore.isLogin">
+                        <div :style="props.isLoginInputShow ? 'text-align: center' : ''" class="user-name">{{ userStore.userRealName }}</div>
                         <div :style="props.isLoginInputShow ? 'text-align: center' : ''" class="user-desc">欢迎您</div>
                     </template>
                 </div>
@@ -27,7 +27,7 @@
                 </div>
             </transition>
         </div>
-        <login-button class="logout-btn" v-if="state.isLogin && props.isLoginInputShow" :text="'注销'"
+        <login-button class="logout-btn" v-if="userStore.isLogin && props.isLoginInputShow" :text="'注销'"
             @click="handleLogout"></login-button>
     </div>
 </template>
@@ -35,11 +35,12 @@
 <script lang="ts" setup>
 import LoginButton from './LoginButton.vue';
 import { reactive } from 'vue';
-import { login } from '../../../api/user/user';
 import { trim } from '@/utils/utils'
 import { useStore } from '@/store/index'
+import { useUserStore } from '@/store/user'
 const emit = defineEmits(['show-or-hide-login'])
 const store = useStore()
+const userStore = useUserStore()
 
 const props = defineProps({
     isLoginStatus: Boolean,
@@ -52,18 +53,8 @@ const state = reactive({
     loginStatus: 'normal',
     userName: '',
     userPassword: '',
-    isLogin: false,
-    userRealName: ''
+    // isLogin / userRealName 由 userStore 提供，模板用 userStore.xxx 绑定
 })
-
-const token = localStorage.getItem("token")
-if (token) {
-    state.isLogin = true;
-    const userData = JSON.parse(localStorage.getItem("userData") || '{}');
-    if (userData) {
-        state.userRealName = userData.userRealName;
-    }
-}
 
 const showLogin = () => {
     // 如果已经登录或者正在编辑卡片，不显示登录框
@@ -83,23 +74,18 @@ const checkUserNameOrPassword = () => {
     return true
 }
 
-const handleLogin = () => {
+const handleLogin = async () => {
     if (!checkUserNameOrPassword()) {
         return
     }
     state.loginStatus = 'loading'
-    login({ userName: state.userName, password: state.userPassword }).then((res) => {
-        console.log('成功')
-        console.log(res)
-        if (res.code == 200) {
-            localStorage.setItem('token', res.data.token);
-            localStorage.setItem('userData', JSON.stringify(res.data.userData));
-            state.userRealName = res.data.userData.userRealName;
-            store.token = res.data.token;
+    try {
+        const ok = await userStore.login(state.userName, state.userPassword)
+        if (ok) {
             setTimeout(() => {
                 state.loginStatus = 'success'
                 setTimeout(() => {
-                    state.isLogin = true
+                    userStore.isLogin = true
                     setTimeout(() => {
                         emit('show-or-hide-login', false)
                     }, 1000);
@@ -110,18 +96,11 @@ const handleLogin = () => {
                 state.loginStatus = 'fail'
             }, 500);
         }
-    }).catch(error => {
-        console.log('失败')
-        console.log(error)
-    })
+    } catch (error) {
+        console.log('登录失败', error)
+        state.loginStatus = 'fail'
+    }
 }
-
-// const handleRegister = () => {
-//     if (!checkUserNameOrPassword()) {
-//         return
-//     }
-//     register({ userName: state.userName, password: state.userPassword })
-// }
 
 const handleInputChange = () => {
     state.loginStatus = "normal"
@@ -129,9 +108,7 @@ const handleInputChange = () => {
 
 const handleLogout = () => {
     state.loginStatus = 'normal';
-    localStorage.removeItem('token');
-    store.token = "";
-    state.isLogin = false;
+    userStore.logout()
 }
 </script>
 
