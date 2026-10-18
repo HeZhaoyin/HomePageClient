@@ -88,7 +88,7 @@ async function loadTextures(THREE: any): Promise<Record<string, any> | null> {
     return new Promise<any>((resolve, reject) => {
       loader.load(
         url,
-        (tex) => {
+        (tex: any) => {
           tex.anisotropy = 4
           resolve(tex)
         },
@@ -323,12 +323,9 @@ onMounted(() => {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
 
-    let lastT = performance.now()
     const tick = () => {
       if (disposed) return
       const now = performance.now()
-      const dt = Math.min((now - lastT) / 1000, 0.05)
-      lastT = now
 
       // 惯性 + 持续自转
       if (!dragging) {
