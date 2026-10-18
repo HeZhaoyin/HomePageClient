@@ -146,15 +146,34 @@ async function loadTextures(THREE: any): Promise<Record<string, any> | null> {
       )
     })
   const results: Record<string, any> = {}
-  await Promise.allSettled([
-    loadOne(TEXTURES.day).then((t) => (results.day = t)),
-    loadOne(TEXTURES.night).then((t) => (results.night = t)),
-    loadOne(TEXTURES.clouds).then((t) => (results.clouds = t)),
-    loadOne(TEXTURES.normal).then((t) => (results.normal = t)),
-    loadOne(TEXTURES.specular).then((t) => (results.specular = t)),
-  ])
+  const wanted: Array<[string, boolean]> = [
+    ['day', true],     // 必须
+    ['night', false],  // 缺失则退回 day
+    ['clouds', false], // 缺失则不建云层
+    ['normal', false], // 缺失则跳过法线扰动
+    ['specular', false], // 缺失则跳过海洋高光
+  ]
+  await Promise.allSettled(
+    wanted.map(([key]) =>
+      loadOne((TEXTURES as any)[key]).then((t) => (results[key] = t)),
+    ),
+  )
   if (!results.day) return null
   return results
+}
+
+// 造一张 1x1 的纯色占位贴图：贴图缺失时喂给 sampler，
+// 避免 sampler2D 拿到 undefined 导致整个 shader 行为不可预期。
+function placeholderTexture(THREE: any, rgb: [number, number, number]) {
+  const c = document.createElement('canvas')
+  c.width = 1
+  c.height = 1
+  const ctx = c.getContext('2d')!
+  ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
+  ctx.fillRect(0, 0, 1, 1)
+  const t = new THREE.Texture(c)
+  t.needsUpdate = true
+  return t
 }
 
 // ---- 天文算法：太阳直射点经纬度（随时间实时变化）----
@@ -180,8 +199,6 @@ function subsolarPoint(date: Date): { lat: number; lon: number } {
 // 必须和球体 UV 严格对齐，否则 pin / 太阳方向会落在错误的位置：
 //   three r128: x=-cos(phi)sin(theta), y=cos(theta), z=sin(phi)sin(theta)
 //   phi=(lon+180)°, theta=(90-lat)°（等距柱状贴图 u=0 在 180°W）
-// 化简后即：x = cos(lat)cos(lon+180)... 直接写标准形式：
-//   x = -cos(lat)*cos(lon+180)  →  实算用下面的 phi/theta 形式，避免符号踩坑
 function geoToVec3(lat: number, lon: number, r: number): { x: number; y: number; z: number } {
   const phi = (lon + 180) * D2R
   const theta = (90 - lat) * D2R
@@ -237,6 +254,9 @@ onMounted(() => {
   let cameraZ = DEFAULT_ZOOM // 初始远一点，定位后聚焦拉近
   let targetCameraZ = DEFAULT_ZOOM
   const CLOUD_SPEED = 0.00025
+  // 自转速度：每帧弧度。约 0.001 rad/帧 @60fps ≈ 0.06 rad/s ≈ 3.5°/s，
+  // 转一圈约 100 秒，够慢不晕。
+  const SELF_SPIN = 0.001
   type GeoResult = { lat: number; lon: number; countryCode?: string }
   const DEFAULT_GEO: GeoResult = { lat: 35.5, lon: 104, countryCode: 'CN' } // 兜底：中国中心
   let geo: GeoResult = DEFAULT_GEO
@@ -304,22 +324,32 @@ onMounted(() => {
     scene.add(atmo)
 
     // ===== 地球本体：昼夜 shader（白天 + 夜间灯光 + 法线凹凸 + 镜面 + 晨昏线暖色）=====
+    // 缺失的贴图用 1x1 占位图顶上，并关掉对应特性：
+    //   normal  缺失 → 法线贴图填中灰 (128,128,255) = 零扰动
+    //   specular缺失 → 镜面遮罩填纯黑 = 没有海面高光
+    const hasNormal = !!tex.normal
+    const hasSpec = !!tex.specular
     const earthMat = new THREE.ShaderMaterial({
       uniforms: {
         dayTex: { value: tex.day },
         nightTex: { value: tex.night || tex.day },
-        normalTex: { value: tex.normal },
-        specTex: { value: tex.specular },
+        normalTex: { value: tex.normal || placeholderTexture(THREE, [128, 128, 255]) },
+        specTex: { value: tex.specular || placeholderTexture(THREE, [0, 0, 0]) },
         sunDir: { value: new THREE.Vector3(1, 0, 0) },
         normalScale: { value: new THREE.Vector2(0.85, 0.85) },
+        useNormal: { value: hasNormal ? 1 : 0 },
+        useSpec: { value: hasSpec ? 1 : 0 },
       },
       vertexShader: `
         varying vec2 vUv;
-        varying vec3 vNormal;
+        varying vec3 vNormalW;
         varying vec3 vWorldPos;
         void main() {
           vUv = uv;
-          vNormal = normalize(normalMatrix * normal);
+          // 显式取 modelMatrix 左上 3x3（uniform scale，等于法线矩阵），
+          // 把法线转到世界空间，和 cameraPosition / sunDir 保持同一个空间
+          mat3 nm = mat3(modelMatrix[0].xyz, modelMatrix[1].xyz, modelMatrix[2].xyz);
+          vNormalW = normalize(nm * normal);
           vec4 wp = modelMatrix * vec4(position, 1.0);
           vWorldPos = wp.xyz;
           gl_Position = projectionMatrix * viewMatrix * wp;
@@ -331,44 +361,41 @@ onMounted(() => {
         uniform sampler2D specTex;
         uniform vec3 sunDir;
         uniform vec2 normalScale;
+        uniform float useNormal;
+        uniform float useSpec;
         varying vec2 vUv;
-        varying vec3 vNormal;
+        varying vec3 vNormalW;
         varying vec3 vWorldPos;
         void main() {
-          // 法线扰动（让山地/海洋更真实）
-          vec3 nrm = normalize(texture2D(normalTex, vUv).xyz * 2.0 - 1.0);
-          nrm.xy *= normalScale;
-          // 简化：用法线扰动调整光照（不重算切线空间，够示意）
-          vec3 perturbNormal = normalize(vNormal + nrm.xy * 0.3);
+          vec3 n = normalize(vNormalW);
+
+          // 法线扰动：贴图解码成切空间偏移，以 vec2 显式升维后加到 vec3 上
+          // （GLSL 不允许 vec3 + vec2，之前就是这里编译失败）
+          vec2 nOff = (texture2D(normalTex, vUv).xy * 2.0 - 1.0) * normalScale * useNormal;
+          vec3 perturbNormal = normalize(n + vec3(nOff * 0.35, 0.0));
 
           vec3 dayColor = texture2D(dayTex, vUv).rgb;
           vec3 nightColor = texture2D(nightTex, vUv).rgb * 1.7;
 
-          // 镜面（海洋反光）
-          float spec = 0.0;
-          if (texture2D(specTex, vUv).r > 0.5) {
-            spec = 0.4;
-          }
+          vec3 sunDirN = normalize(sunDir);
+          float diff = dot(perturbNormal, sunDirN);
+          float dayAmount = smoothstep(-0.12, 0.22, diff);
 
-          float diff = dot(perturbNormal, normalize(sunDir));
-          float dayAmount = smoothstep(-0.1, 0.3, diff);
-
-          // 晨昏线：diff 在 0 附近加暖色（日落橙红）
-          float twilight = 1.0 - smoothstep(0.0, 0.25, abs(diff));
-          vec3 twilightColor = vec3(0.95, 0.55, 0.25) * twilight * 0.4;
-
-          // 镜面高光（简化 Blinn-Phong）
-          vec3 viewDir = normalize(cameraPosition - vWorldPos);
-          vec3 halfDir = normalize(normalize(sunDir) + viewDir);
-          float specAmount = pow(max(dot(perturbNormal, halfDir), 0.0), 32.0) * spec * dayAmount;
-
+          // 晨昏线：diff 接近 0 时叠日落暖色，且只在昼侧
+          float twilight = 1.0 - smoothstep(0.0, 0.22, abs(diff));
           vec3 color = mix(nightColor, dayColor, dayAmount);
-          color += twilightColor;
-          color += vec3(specAmount) * dayAmount;
+          color += vec3(0.95, 0.55, 0.25) * (twilight * dayAmount * 0.35);
 
-          // 大气边缘暗化（模拟曲率）
-          float edge = 1.0 - pow(max(dot(normalize(vNormal), viewDir), 0.0), 1.5);
-          color *= 1.0 - edge * 0.35;
+          // 海洋镜面高光（specTex.r > 0.5 视为海面）
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          vec3 halfDir = normalize(sunDirN + viewDir);
+          float specMask = step(0.5, texture2D(specTex, vUv).r) * useSpec;
+          float specAmount = pow(max(dot(perturbNormal, halfDir), 0.0), 42.0) * specMask * 0.55 * dayAmount;
+          color += vec3(specAmount);
+
+          // 边缘暗化（模拟大气曲率）
+          float rim = 1.0 - pow(max(dot(n, viewDir), 0.0), 1.5);
+          color *= 1.0 - rim * 0.35;
 
           gl_FragColor = vec4(color, 1.0);
         }`,
@@ -502,13 +529,17 @@ onMounted(() => {
         velX *= 0.94
         velY *= 0.94
       }
-      // 未手动拖拽时，向"目标朝向 + 国家中心"缓动（实现"定位后自动聚焦"）
+      // 缓动到目标朝向。注意：只能用「每帧固定增量」驱动自转，
+      // 绝不能用 performance.now() 的绝对时间 —— 那会让目标值随时钟线性增长，
+      // 页面开久了转速会越来越快。
       if (!dragging && geoReady) {
-        rotX += (targetRotX + 0.00012 * now - rotX) * 0.02 + velX
-        rotY += (targetRotY + 0.00012 * now - rotY) * 0.02 + velY
+        rotX += (targetRotX - rotX) * 0.02 + velX
+        rotY += (targetRotY - rotY) * 0.02 + velY
+        // 聚焦到位后再叠加极慢的自转，否则缓动永远追不上移动的目标
+        if (Math.abs(rotY - targetRotY) < 0.05) rotY += SELF_SPIN
       } else {
         rotX += velX
-        rotY += velX + 0.00012
+        rotY += velX + SELF_SPIN
       }
       rotX = Math.max(-1.1, Math.min(1.1, rotX))
 
@@ -516,11 +547,12 @@ onMounted(() => {
       globe.rotation.y = rotY
       globe.rotation.x = rotX
       if (cloudLayer) {
-        cloudLayer.rotation.y = rotY + now * CLOUD_SPEED
+        // 云相对地球多转的量必须每次重置基准，用 rotY + 固定偏移而非累计时间
+        cloudLayer.rotation.y = rotY + CLOUD_SPEED * 60
         cloudLayer.rotation.x = rotX
       }
       glow.rotation.copy(globe.rotation)
-      atmo.rotation.y = now * 0.00004
+      atmo.rotation.y = (atmo.rotation.y || 0) + 0.00004
       if (pin) {
         pin.rotation.y = rotY
         pin.rotation.x = rotX
@@ -532,7 +564,7 @@ onMounted(() => {
         camera.position.z = cameraZ
       }
 
-      // 星星缓慢反向 + 闪烁
+      // 星星缓慢反向 + 闪烁（闪烁用绝对时间是安全的，只影响透明度正弦）
       stars.rotation.y -= 0.00006
       ;(stars.material as any).opacity = 0.7 + 0.18 * Math.sin(now * 0.0011)
 
