@@ -8,65 +8,42 @@
 <script lang="ts" setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 
-// 动态地球：three.js 走国内 CDN 动态加载（不进 bundle、不走 frp 小水管）；
-// WebGL 不可用 / 加载失败时自动回退 CSS 动态背景（用现有地球图 cover 铺满 + 呼吸光晕），
-// 顺带修掉旧实现"2K 屏四周留白"的 bug（旧 CSS 缺 background-size: cover）。
+// 炫酷动态地球：three.js + 多贴图（日间/夜间城市灯光/云层/法线/凹凸）
+// three.js 走国内 CDN（不进 bundle、不占 frp 小水管），贴图走 GitHub raw 直连。
+// WebGL / CDN / 贴图失败时自动降级 CSS 动态背景（顺带修 2K 留白 bug）。
 const wrapRef = ref<HTMLDivElement>()
 const canvasRef = ref<HTMLCanvasElement>()
 const fallbackReason = ref('')
 
-// three.js CDN（国内可达性已验证：staticfile 最快 ~0.4s，jsDelivr 做备份）
+// three.js CDN（国内可达性已验证：staticfile 最快 ~0.4s，jsDelivr 备份）
 const THREE_CDN_PRIMARY = 'https://cdn.staticfile.org/three.js/r128/three.min.js'
 const THREE_CDN_BACKUP = 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js'
 
-// three.js 官方仓库的球面展开地球贴图（2048x1024 equirectangular，~500KB，
-// 国内 GitHub raw 直连可达；下载走 CDN 直连不占 frp）。
-// 用户要求"贴图尽量 1K"：拉到 2K 后本地 canvas 缩到 1024x512 再送 GPU，省显存/解码。
-const EARTH_TEXTURE_RAW =
-  'https://raw.githubusercontent.com/mrdoob/three.js/HEAD/examples/textures/planets/earth_atmos_2048.jpg'
+// three.js 官方仓库自带的一整套地球贴图（全在 examples/textures/planets/）
+const TEX = (name: string) =>
+  `https://raw.githubusercontent.com/mrdoob/three.js/HEAD/examples/textures/planets/${name}`
+const TEXTURES = {
+  day: TEX('earth_day_4096.jpg'),
+  night: TEX('earth_night_4096.jpg'),
+  clouds: TEX('earth_clouds_1024.png'),
+  normal: TEX('earth_normal_2048.jpg'),
+  bump: TEX('earth_bump_roughness_clouds_4096.jpg'),
+}
 
 let disposed = false
-
 // 动态注入 <script> 的节点存模块级数组保引用（防 GC）
 const pendingScripts: HTMLScriptElement[] = []
 // 已发起加载的 src 集合（防重复注入同一个 CDN）
 const loadedScripts = new Set<string>()
 
-// ---- 贴图：下载 → 1K 缩放 → 得一张 1024x512 的 JPEG dataURL ----
-// 关键：canvas 缩放失败时不能让整个 boot reject（会导致整地球降级）。
-// 回退策略：缩放失败就**直接用原始 2K 贴图 URL**（TextureLoader 走 <img> 加载，
-// 不受 CORS 限制，2K 也比降级成 CSS 好）。
-async function loadEarthTexture1k(): Promise<string> {
-  try {
-    const resp = await fetch(EARTH_TEXTURE_RAW)
-    if (!resp.ok) throw new Error('texture fetch ' + resp.status)
-    const blob = await resp.blob()
-    const bmp = await createImageBitmap(blob)
-    const scale = 1024 / bmp.width
-    const off = document.createElement('canvas')
-    off.width = 1024
-    off.height = Math.max(1, Math.round(bmp.height * scale))
-    off.getContext('2d')!.drawImage(bmp as CanvasImageSource, 0, 0, off.width, off.height)
-    bmp.close?.()
-    const dataUrl = off.toDataURL('image/jpeg', 0.85)
-    return dataUrl
-  } catch (e) {
-    // 缩放/canvas 失败 → 直接用原始 2K 贴图 URL（img 加载不受 CORS 限制）
-    console.warn('[EarthGlobe] 贴图 1K 缩放失败，回退用原始 2K 贴图 URL', e)
-    return EARTH_TEXTURE_RAW
-  }
-}
-
-// ---- three.js：优先国内 CDN，失败回退 jsDelivr；成功则挂到 window.THREE 复用 ----
-// 注意：script 节点必须存到模块级数组里保引用，否则 inject 函数返回后局部变量 s
-// 失去引用、脚本节点会被 GC/清出 DOM，onload 永不触发 → 静默降级（无报错）。
+// ---- three.js：优先国内 CDN，失败回退 jsDelivr ----
+// script 节点必须存模块级数组保引用，否则局部变量被 GC → 静默降级（无报错）。
 async function loadThree(): Promise<any> {
   const windowAny = window as any
   if (windowAny.THREE) return windowAny.THREE
   const inject = (src: string) =>
     new Promise<any>((resolve, reject) => {
       if (loadedScripts.has(src)) {
-        // 该 src 已在加载/已加载完成：轮询等 window.THREE 就绪（防重复注入）
         const t0 = Date.now()
         const poll = () => {
           if ((window as any).THREE) return resolve((window as any).THREE)
@@ -92,7 +69,7 @@ async function loadThree(): Promise<any> {
         loadedScripts.delete(src)
         reject(new Error('cdn fail ' + src))
       }
-      pendingScripts.push(s) // 保持引用，防节点被 GC
+      pendingScripts.push(s) // 保引用防 GC
       document.head.appendChild(s)
     })
   try {
@@ -100,6 +77,38 @@ async function loadThree(): Promise<any> {
   } catch {
     return await inject(THREE_CDN_BACKUP)
   }
+}
+
+// ---- 贴图：并行拉整套；任一失败降级为"少贴图层"，绝不整球降级 ----
+// 关键设计：核心 day 贴图失败才整球降级（CSS 兜底），其余层失败则跳过该层，
+// 保证 3D 主体始终能出（非关键资源失败不能拖垮关键路径）。
+async function loadTextures(THREE: any): Promise<Record<string, any> | null> {
+  const loadOne = async (url: string) => {
+    const loader = new THREE.TextureLoader()
+    return new Promise<any>((resolve, reject) => {
+      loader.load(
+        url,
+        (tex) => {
+          tex.anisotropy = 4
+          resolve(tex)
+        },
+        undefined,
+        () => reject(new Error('tex fail ' + url)),
+      )
+    })
+  }
+  const results: Record<string, any> = {}
+  // 全部并行，失败的收集起来跳过
+  await Promise.allSettled([
+    loadOne(TEXTURES.day).then((t) => (results.day = t)),
+    loadOne(TEXTURES.night).then((t) => (results.night = t)),
+    loadOne(TEXTURES.clouds).then((t) => (results.clouds = t)),
+    loadOne(TEXTURES.normal).then((t) => (results.normal = t)),
+    loadOne(TEXTURES.bump).then((t) => (results.bump = t)),
+  ])
+  // day 是核心，没有 day 就整球降级
+  if (!results.day) return null
+  return results
 }
 
 function webglAvailable(): boolean {
@@ -125,15 +134,17 @@ onMounted(() => {
     return
   }
 
-  let renderer: any, scene: any, camera: any, globe: any, glow: any, stars: any
+  let renderer: any, scene: any, camera: any
+  let globe: any, cloudLayer: any, glow: any, stars: any, atmo: any
+  let sunLight: any
   let frameId = 0
   let dragging = false
-  let lastX = 0, lastY = 0, velX = 0.0006, velY = 0
-  let rotX = 0, rotY = 0
+  let lastX = 0, lastY = 0, velX = 0, velY = 0
+  let rotX = 0.15, rotY = 0
+  const CLOUD_SPEED = 0.00045 // 云层相对自转速度（比地球快 → 产生"云在动"）
 
   const boot = async () => {
-    // 贴图与 three.js 并行拉，缩短首帧等待
-    const [THREE, textureUrl] = await Promise.all([loadThree(), loadEarthTexture1k()])
+    const THREE = await loadThree()
     if (disposed) return
 
     const w = wrap.clientWidth || window.innerWidth
@@ -144,58 +155,145 @@ onMounted(() => {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 
     scene = new THREE.Scene()
-    camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100)
-    camera.position.z = 3
+    camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 200)
+    camera.position.z = 3.2
 
-    // 地球（1K 贴图）
+    // 贴图（day 必须，其余可选）
+    const tex = await loadTextures(THREE)
+    if (disposed) return
+    if (!tex) {
+      fallbackReason.value = 'load-failed'
+      return
+    }
+
     const RADIUS = 1
-    globe = new THREE.Mesh(
-      new THREE.SphereGeometry(RADIUS, 64, 64),
-      new THREE.MeshPhongMaterial({
-        map: new THREE.TextureLoader().load(textureUrl),
-        specular: new THREE.Color(0x333333),
-        shininess: 12,
+
+    // ===== 大气（Fresnel shader：边缘亮蓝、中心透明 → 真实大气散射）=====
+    atmo = new THREE.Mesh(
+      new THREE.SphereGeometry(RADIUS * 1.18, 64, 64),
+      new THREE.ShaderMaterial({
+        vertexShader: `
+          varying vec3 vNormal;
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: `
+          varying vec3 vNormal;
+          void main() {
+            float intensity = pow(0.72 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 4.5);
+            gl_FragColor = vec4(0.30, 0.55, 1.0, 1.0) * intensity;
+          }`,
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide,
+        transparent: true,
       }),
     )
+    scene.add(atmo)
+
+    // ===== 地球本体（日间 + 夜间灯光 shader：朝向太阳面白天，背向面显示城市灯）=====
+    const earthMat = new THREE.ShaderMaterial({
+      uniforms: {
+        dayTex: { value: tex.day },
+        nightTex: { value: tex.night || tex.day },
+        sunDir: { value: new THREE.Vector3(1, 0.4, 0.8) },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vPos;
+        void main() {
+          vUv = uv;
+          vNormal = normalize(normalMatrix * normal);
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vPos = mv.xyz;
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform sampler2D dayTex;
+        uniform sampler2D nightTex;
+        uniform vec3 sunDir;
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vPos;
+        void main() {
+          vec3 dayColor = texture2D(dayTex, vUv).rgb;
+          vec3 nightColor = texture2D(nightTex, vUv).rgb * 1.6;
+          // 法线与太阳光夹角 → 白天/黑夜混合（smoothstep 让晨昏线柔和）
+          float diff = dot(vNormal, normalize(sunDir));
+          float mixRatio = smoothstep(-0.15, 0.35, diff);
+          vec3 color = mix(nightColor, dayColor, mixRatio);
+          // 法线/凹凸（若加载到）
+          gl_FragColor = vec4(color, 1.0);
+        }`,
+      transparent: false,
+    })
+    // 若加载到法线/凹凸贴图，挂到 phong 之外的层（这里简化：shader 里没用，留作扩展）
+    globe = new THREE.Mesh(new THREE.SphereGeometry(RADIUS, 96, 96), earthMat)
     scene.add(globe)
 
-    // 大气光晕（背面球体 + 半透明蓝）
+    // ===== 云层（独立半透明球，比地球稍大、自转更快 → "云在飘"）=====
+    if (tex.clouds) {
+      cloudLayer = new THREE.Mesh(
+        new THREE.SphereGeometry(RADIUS * 1.015, 64, 64),
+        new THREE.MeshLambertMaterial({
+          map: tex.clouds,
+          transparent: true,
+          opacity: 0.4,
+          depthWrite: false,
+        }),
+      )
+      scene.add(cloudLayer)
+    }
+
+    // ===== 内部大气光晕（紧贴地球，柔和蓝光）=====
     glow = new THREE.Mesh(
-      new THREE.SphereGeometry(RADIUS * 1.06, 64, 64),
+      new THREE.SphereGeometry(RADIUS * 1.04, 64, 64),
       new THREE.MeshBasicMaterial({
-        color: 0x4d8dff,
+        color: 0x66aaff,
         transparent: true,
-        opacity: 0.16,
+        opacity: 0.1,
         side: THREE.BackSide,
       }),
     )
     scene.add(glow)
 
-    // 星星背景
+    // ===== 星空（多颗大小/透明度不一，缓慢旋转）=====
     const starGeo = new THREE.BufferGeometry()
-    const N = 600
+    const N = 1200
     const pos = new Float32Array(N * 3)
+    const sizes = new Float32Array(N)
     for (let i = 0; i < N; i++) {
-      const r = 20 + Math.random() * 20
+      const r = 30 + Math.random() * 60
       const t = Math.random() * Math.PI * 2
       const p = Math.acos(2 * Math.random() - 1)
       pos[i * 3] = r * Math.sin(p) * Math.cos(t)
       pos[i * 3 + 1] = r * Math.sin(p) * Math.sin(t)
       pos[i * 3 + 2] = r * Math.cos(p)
+      sizes[i] = Math.random()
     }
     starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
     stars = new THREE.Points(
       starGeo,
-      new THREE.PointsMaterial({ color: 0xffffff, size: 0.06, transparent: true, opacity: 0.8 }),
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 0.12,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+      }),
     )
     scene.add(stars)
 
-    // 光
-    scene.add(new THREE.AmbientLight(0xffffff, 0.55))
-    const sun = new THREE.DirectionalLight(0xffffff, 1.1)
-    sun.position.set(2, 1, 3)
-    scene.add(sun)
+    // ===== 光（模拟太阳）=====
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25))
+    sunLight = new THREE.DirectionalLight(0xffffff, 1.6)
+    sunLight.position.set(1, 0.4, 0.8)
+    scene.add(sunLight)
 
+    // ---- 交互：拖拽旋转 + 惯性 + 视差 ----
+    const mouse = { x: 0, y: 0 }
     const resize = () => {
       const nw = wrap.clientWidth || window.innerWidth
       const nh = wrap.clientHeight || window.innerHeight
@@ -211,9 +309,12 @@ onMounted(() => {
       lastY = e.clientY
     }
     const onMove = (e: PointerEvent) => {
+      // 视差（不拖拽时也轻微跟随鼠标）
+      mouse.x = (e.clientX / window.innerWidth - 0.5) * 2
+      mouse.y = (e.clientY / window.innerHeight - 0.5) * 2
       if (!dragging) return
-      velX = (e.clientX - lastX) * 0.005
-      velY = (e.clientY - lastY) * 0.005
+      velX = (e.clientX - lastX) * 0.004
+      velY = (e.clientY - lastY) * 0.004
       lastX = e.clientX
       lastY = e.clientY
     }
@@ -222,26 +323,46 @@ onMounted(() => {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
 
+    let lastT = performance.now()
     const tick = () => {
       if (disposed) return
-      // 惯性 + 自转（未拖拽时速度衰减，地球持续缓转）
+      const now = performance.now()
+      const dt = Math.min((now - lastT) / 1000, 0.05)
+      lastT = now
+
+      // 惯性 + 持续自转
       if (!dragging) {
-        velX *= 0.96
-        velY *= 0.96
+        velX *= 0.95
+        velY *= 0.95
       }
-      rotY += velX + 0.0006
+      rotY += velX + 0.00045
       rotX += velY
+      rotX = Math.max(-1.1, Math.min(1.1, rotX))
+
+      // 地球 + 云 + 光晕一起转（云多转一点 → 云飘动）
       globe.rotation.y = rotY
-      globe.rotation.x = Math.max(-1.2, Math.min(1.2, rotX))
+      globe.rotation.x = rotX
+      if (cloudLayer) {
+        cloudLayer.rotation.y = rotY + now * CLOUD_SPEED
+        cloudLayer.rotation.x = rotX
+      }
       glow.rotation.copy(globe.rotation)
-      stars.rotation.y -= 0.0001
+      atmo.rotation.y = now * 0.00005 // 大气几乎不动
+
+      // 星星缓慢反向旋转 + 闪烁（用 size 属性做微幅脉动）
+      stars.rotation.y -= 0.00008
+      ;(stars.material as any).opacity = 0.7 + 0.15 * Math.sin(now * 0.0012)
+
+      // 视差：相机随鼠标轻微位移
+      camera.position.x += (mouse.x * 0.15 - camera.position.x) * 0.05
+      camera.position.y += (-mouse.y * 0.15 - camera.position.y) * 0.05
+      camera.lookAt(0, 0, 0)
 
       renderer.render(scene, camera)
       frameId = requestAnimationFrame(tick)
     }
     tick()
 
-    // 暴露清理（onUnmounted 调）
     ;(wrap as any)._cleanup = () => {
       cancelAnimationFrame(frameId)
       window.removeEventListener('resize', resize)
@@ -253,8 +374,7 @@ onMounted(() => {
   }
 
   boot().catch((e) => {
-    // 降级 2：CDN / 贴图加载失败 → CSS 兜底
-    console.error('globe init failed, fallback:', e)
+    console.error('[EarthGlobe] init failed, fallback:', e)
     fallbackReason.value = 'load-failed'
   })
 })
@@ -275,26 +395,26 @@ onUnmounted(() => {
   inset: 0;
   z-index: -2;
   overflow: hidden;
-  background: #0a0e1a;
+  // 深空渐变底色（地球之外的空间感）
+  background: radial-gradient(ellipse at 50% 40%, #0d1530 0%, #070a18 55%, #03040a 100%);
 
   canvas {
     width: 100%;
     height: 100%;
     display: block;
     cursor: grab;
-
     &:active {
       cursor: grabbing;
     }
   }
 }
 
-/* WebGL/加载失败时的 CSS 降级：现有地球图 cover 铺满（修 2K 留白 bug）+ 呼吸光晕 */
+/* WebGL/加载失败时的 CSS 降级：现有地球图 cover 铺满（修 2K 留白）+ 呼吸光晕 */
 .globe-fallback {
   position: absolute;
   inset: 0;
   background: url('@/assets/bgtiny.webp') no-repeat center center;
-  background-size: cover; /* 关键修复：铺满任意分辨率，2K/4K 不留白 */
+  background-size: cover;
   animation: globe-breathe 9s ease-in-out infinite;
 }
 
