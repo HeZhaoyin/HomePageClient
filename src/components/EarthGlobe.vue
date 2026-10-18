@@ -31,45 +31,60 @@ const THREE_CDNS = [
   'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js',
 ]
 
-// 远端（夜面 / 未覆盖区域）贴图：three.js 官方仓库整套地球纹理，473KB/1.9MB
-const TEX = (name: string) =>
-  `https://raw.githubusercontent.com/mrdoob/three.js/HEAD/examples/textures/planets/${name}`
-const TEXTURES = {
-  day: TEX('earth_day_4096.jpg'),
-  night: TEX('earth_night_4096.jpg'),
-  clouds: TEX('earth_clouds_1024.png'),
-  normal: TEX('earth_normal_2048.jpg'),
-  specular: TEX('earth_specular_2048.jpg'),
-}
-
+// 整球昼图：ArcGIS World Imagery 的 /export（等距柱状，2048x1024 约 417KB）。
+// 为什么不再用 GitHub raw 的 earth_day_4096：
+//   raw.githubusercontent.com 实测时通时断（3 次里挂 1 次，SSL 错误），
+//   而它是「核心贴图」，一旦失败整个 3D 地球直接降级成 CSS 静态图。
+//   ArcGIS 已验证稳定且 CORS:*，且能按 bboxSR=4326 直接出等距柱状图，
+//   球面 UV 完全不用改。
 // 近端高清卫星图：ArcGIS World Imagery 的 /export 接口。
 // 关键：它支持 bboxSR=4326（bbox 用经纬度），返回的就是等距柱状图，
 // 球面 UV 完全不用改。但尺寸有服务端上限（实测 >4096 宽会返回同一张图），
 // 所以想更清晰只能「按区域裁小」，不能靠加大 size。
 const ARCGIS_EXPORT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export'
 
-// 高清区域的经纬度跨度。44 度约覆盖中国中东部 + 周边，
-// 2048x2048 @ ~0.6MB。区域占地球视角约 38%，
-// 与相机距离无关，只由跨度决定——跨度越小越"局部"。
-const REGION_LON_SPAN = 44
-const REGION_LAT_SPAN = 44
-const REGION_WIDTH = 2048
-const REGION_HEIGHT = 2048
+// 整球昼图 URL（等距柱状）
+const GLOBAL_DAY_URL =
+  `${ARCGIS_EXPORT}?bbox=-180,-90,180,90&bboxSR=4326&imageSR=4326` +
+  `&size=2048,1024&format=jpg&f=image`
+
+// 云层/法线/镜面贴图仍用 three.js 官方仓库（非核心，失败可安全跳过）
+const TEX = (name: string) =>
+  `https://raw.githubusercontent.com/mrdoob/three.js/HEAD/examples/textures/planets/${name}`
+const TEXTURES = {
+  clouds: TEX('earth_clouds_1024.png'),
+  normal: TEX('earth_normal_2048.jpg'),
+  specular: TEX('earth_specular_2048.jpg'),
+}
+
+// 高清区域的经纬度跨度。10x8 度约覆盖一个省份（广东 7.5x5.3 度），
+// 配合 d≈1.1 的相机距离，屏幕上看到的主要就是该省。
+// 与相机距离无关，只由跨度决定 —— 跨度越小越"局部"。
+const REGION_LON_SPAN = 10
+const REGION_LAT_SPAN = 8
+const REGION_WIDTH = 1536
+const REGION_HEIGHT = 1280
+
+// 夜间灯光高清区：NASA GIBS VIIRS Black Marble，epsg4326 瓦片拼接。
+// 真数据约 15 弧秒，但 GIBS 服务端最高只到 L7（228 px/度）。
+// L6 = 114 px/度（现有整球 night 贴图仅 11.4 px/度，差 20 倍），
+// 广东范围 6 张瓦片约 1.5MB；L7 需 4.5MB，对 frp 3M 小水管偏大，故取 L6。
+const NIGHT_TILE_LEVEL = 6
+const NIGHT_TILE_BASE = 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/500m'
+const NIGHT_TILE_SIZE = 512
 
 // 图钉在屏幕上的目标高度（CSS 像素）。Sprite 按屏幕尺寸呈现，
 // 所以这个值是恒定的，不受相机距离 / DPR / 画布大小影响。
-const PIN_SCREEN_H = 34
-// 图钉画布尺寸（宽 x 高），针底画在 canvas y=184
-const PIN_CANVAS_W = 128
-const PIN_CANVAS_H = 192
-const PIN_NEEDLE_BASE_Y = 184
+const PIN_SCREEN_H = 26
+// 图钉画布尺寸（宽 x 高）。用高分辨率绘制再缩放，避免边缘锯齿。
+const PIN_CANVAS_W = 256
+const PIN_CANVAS_H = 384
+// 针底在画布上的 y 坐标（与绘制代码保持一致）
+const PIN_NEEDLE_BASE_Y = PIN_CANVAS_H - 8
 
-// 地球占屏宽的目标比例。宽屏下这决定视觉大小；
-// 0.95 表示地球直径接近屏宽（上下会被裁掉一部分，符合"放大"的诉求）。
-const GLOBE_WIDTH_FRAC = 0.95
-
-// 地球半径基准（与渲染用 SphereGeometry 的 radius 一致）
-const RADIUS_REF = 1
+// 屏幕上想看到的经度跨度（度）。10 度约一个省（广东 7.5 度宽），
+// 配合 10x8 度的高清区域图，画面上主要就是访客所在的省。
+const TARGET_LON_SPAN = 10
 
 // IP 定位（全部 https，避开 Mixed Content；ip-api 的 https 端点 403 已弃用）
 const GEO_PRIMARY = 'https://ipwho.is/'
@@ -214,8 +229,113 @@ async function loadRegionImage(
   }
 }
 
-// ---- 贴图：核心 day 必须，其余失败跳过（非关键层不拖垮主体）----
-async function loadTextures(THREE: any): Promise<Record<string, any> | null> {
+// ---- 局部高清夜间灯光图 ----
+// GIBS 的 epsg4326 瓦片拼接成一张等距柱状图。
+// 网格（来自 WMTSCapabilities.xml）：L 级为 2*2^L 列 x 2^L 行，
+// 每瓦片 512px。瓦片 (col,row) 覆盖
+//   lon: [col*360/W - 180, (col+1)*360/W - 180]
+//   lat: [90 - (row+1)*180/H, 90 - row*180/H]   （row 0 在最北）
+// 按行从上到下拼，正好得到「左边缘 180W、上边缘 90N」的等距柱状图，
+// 与球面 UV 约定完全一致 —— 所以拼接结果可以按同一套 uvOffset/uvScale 贴。
+async function loadNightRegion(
+  THREE: any,
+  lat: number,
+  lon: number,
+): Promise<{ texture: any; uvOffset: [number, number]; uvScale: [number, number] } | null> {
+  const L = NIGHT_TILE_LEVEL
+  // 关键：GIBS '500m' 集的网格不是 2 的幂！
+  // 实测（WMTSCapabilities.xml）：L0=2x1, L1=3x2, L2=5x3, L3=10x5,
+  // L4=20x10, L5=40x20, L6=80x40, L7=160x80。
+  // 曾用 2*2^L x 2^L 把 L6 算成 128x64，行列号全部越界 → 整批 400。
+  const [gridW, gridH] = ({
+    0: [2, 1], 1: [3, 2], 2: [5, 3], 3: [10, 5],
+    4: [20, 10], 5: [40, 20], 6: [80, 40], 7: [160, 80],
+  } as Record<number, [number, number]>)[L] || [80, 40]
+
+  // 想要的窗口（以访客为中心），再对齐到瓦片边界
+  let lon0 = lon - REGION_LON_SPAN / 2
+  let lat0 = lat - REGION_LAT_SPAN / 2
+  if (lon0 < -180) lon0 += 360
+  if (lon0 + REGION_LON_SPAN > 180) lon0 = 180 - REGION_LON_SPAN
+  lat0 = Math.max(-90 + REGION_LAT_SPAN / 2, Math.min(90 - REGION_LAT_SPAN / 2, lat0))
+  const lon1 = lon0 + REGION_LON_SPAN
+  const lat1 = lat0 + REGION_LAT_SPAN
+
+  // 取整到瓦片边界，保证不出现半张瓦片
+  const col0 = Math.max(0, Math.floor(((lon0 + 180) / 360) * gridW))
+  const col1 = Math.min(gridW - 1, Math.ceil(((lon1 + 180) / 360) * gridW) - 1)
+  const row0 = Math.max(0, Math.floor(((90 - lat1) / 180) * gridH))
+  const row1 = Math.min(gridH - 1, Math.floor(((90 - lat0) / 180) * gridH))
+
+  const cols = col1 - col0 + 1
+  const rows = row1 - row0 + 1
+  if (cols <= 0 || rows <= 0) return null
+
+  // 实际覆盖范围（瓦片对齐后可能比目标窗口略大）
+  const coverLon0 = (col0 * 360) / gridW - 180
+  const coverLon1 = ((col1 + 1) * 360) / gridW - 180
+  const coverLat1 = 90 - (row0 * 180) / gridH
+  const coverLat0 = 90 - ((row1 + 1) * 180) / gridH
+
+  const canvas = document.createElement('canvas')
+  canvas.width = cols * NIGHT_TILE_SIZE
+  canvas.height = rows * NIGHT_TILE_SIZE
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+
+  try {
+    // 并发拉瓦片，按 (row, col) 画到画布。
+    // 必须加超时：某些网络环境下请求会挂起（不触发 onload 也不触发
+    // onerror），若没有超时，Promise.all 会永远 pending，把整个地球
+    // 的启动流程堵死 —— 表现就是"地球完全不显示且无报错"。
+    const withTimeout = (p: Promise<void>, ms: number) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ms)
+        p.then(() => { clearTimeout(t); resolve() }, () => { clearTimeout(t); resolve() })
+      })
+
+    let okCount = 0
+    await Promise.all(
+      Array.from({ length: rows }, (_, r) =>
+        Array.from({ length: cols }, (_, c) => {
+          const url = `${NIGHT_TILE_BASE}/${L}/${row0 + r}/${col0 + c}.png`
+          return withTimeout(
+            new Promise<void>((resolve) => {
+              const img = new Image()
+              img.crossOrigin = 'anonymous'
+              img.onload = () => {
+                ctx.drawImage(img, c * NIGHT_TILE_SIZE, r * NIGHT_TILE_SIZE)
+                okCount++
+                resolve()
+              }
+              img.onerror = () => resolve() // 单张失败就留空，不拖垮整体
+              img.src = url
+            }),
+            12000, // 单张瓦片最多等 12 秒
+          )
+        }),
+      ).flat(),
+    )
+    // 瓦片大面积失败时这张 canvas 是半黑的，宁可返回 null 让 shader
+    // 退回整球夜灯图，也不要把黑块贴到地球上。
+    if (okCount < cols * rows * 0.6) return null
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.needsUpdate = true
+    return {
+      texture: tex,
+      uvOffset: [(coverLon0 + 180) / 360, (coverLat0 + 90) / 180],
+      uvScale: [(coverLon1 - coverLon0) / 360, (coverLat1 - coverLat0) / 180],
+    }
+  } catch {
+    return null
+  }
+}
+
+// ---- 贴图加载 ----
+// 分两阶段：核心（昼图，决定能否出 3D）优先拿到，非核心（夜灯/云/法线/镜面）
+// 尽力而为。之前把核心和非核心塞进同一个 Promise.all，任何一慢就把整体
+// 拖过总超时，导致明明昼图已成功却仍判「load-failed」降级。
+async function loadCoreDayTexture(THREE: any): Promise<any | null> {
   const loadOne = (url: string) =>
     new Promise<any>((resolve, reject) => {
       const loader = new THREE.TextureLoader()
@@ -229,21 +349,101 @@ async function loadTextures(THREE: any): Promise<Record<string, any> | null> {
         () => reject(new Error('tex fail ' + url)),
       )
     })
-  const results: Record<string, any> = {}
-  const wanted: Array<[string, boolean]> = [
-    ['day', true],     // 必须
-    ['night', false],  // 缺失则退回 day
-    ['clouds', false], // 缺失则不建云层
-    ['normal', false], // 缺失则跳过法线扰动
-    ['specular', false], // 缺失则跳过海洋高光
-  ]
-  await Promise.allSettled(
-    wanted.map(([key]) =>
-      loadOne((TEXTURES as any)[key]).then((t) => (results[key] = t)),
-    ),
-  )
-  if (!results.day) return null
-  return results
+  try {
+    return await loadOne(GLOBAL_DAY_URL) // ArcGIS，稳定
+  } catch {
+    try {
+      return await loadOne(TEX('earth_day_4096.jpg')) // 退回 GitHub raw
+    } catch {
+      return null
+    }
+  }
+}
+
+async function loadOptionalTextures(THREE: any): Promise<Record<string, any>> {
+  const loadOne = (url: string) =>
+    new Promise<any>((resolve, reject) => {
+      const loader = new THREE.TextureLoader()
+      loader.load(
+        url,
+        (tex: any) => {
+          tex.anisotropy = 4
+          resolve(tex)
+        },
+        undefined,
+        () => reject(new Error('tex fail ' + url)),
+      )
+    })
+  const out: Record<string, any> = {}
+  await Promise.allSettled([
+    // 夜灯：GIBS VIIRS 全球 L2 拼接（15 张，约 1.2MB）
+    loadNightGlobal(THREE).then((t) => t && (out.night = t)),
+    // 退回 GitHub raw 的整球夜灯
+    (async () => {
+      if (out.night) return
+      try {
+        const t = await loadOne(TEX('earth_night_4096.jpg'))
+        if (!out.night) out.night = t
+      } catch {
+        /* 缺失时 shader 退回 dayTex */
+      }
+    })(),
+    // 云 / 法线 / 镜面
+    loadOne(TEXTURES.clouds).then((t) => (out.clouds = t)),
+    loadOne(TEXTURES.normal).then((t) => (out.normal = t)),
+    loadOne(TEXTURES.specular).then((t) => (out.specular = t)),
+  ])
+  return out
+}
+
+// ---- 整球夜灯图：GIBS VIIRS Black Marble L2 拼接 ----
+// L2 网格为 5x3 tiles、每张 512px -> 2560x1536 等距柱状图，约 1.2MB。
+// 按行从上到下拼即得到「左 180W、上 90N」的等距柱状图，与球面 UV 一致。
+async function loadNightGlobal(THREE: any): Promise<any | null> {
+  const L = 2
+  const gridW = 5
+  const gridH = 3
+  const canvas = document.createElement('canvas')
+  canvas.width = gridW * NIGHT_TILE_SIZE
+  canvas.height = gridH * NIGHT_TILE_SIZE
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+
+  const withTimeout = (p: Promise<void>, ms: number) =>
+    new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, ms)
+      p.then(() => { clearTimeout(t); resolve() }, () => { clearTimeout(t); resolve() })
+    })
+
+  let okCount = 0
+  const jobs: Promise<void>[] = []
+  for (let r = 0; r < gridH; r++) {
+    for (let c = 0; c < gridW; c++) {
+      const url = `${NIGHT_TILE_BASE}/${L}/${r}/${c}.png`
+      jobs.push(
+        withTimeout(
+          new Promise<void>((resolve) => {
+            const img = new Image()
+            img.crossOrigin = 'anonymous'
+            img.onload = () => {
+              ctx.drawImage(img, c * NIGHT_TILE_SIZE, r * NIGHT_TILE_SIZE)
+              okCount++
+              resolve()
+            }
+            img.onerror = () => resolve()
+            img.src = url
+          }),
+          15000,
+        ),
+      )
+    }
+  }
+  await Promise.all(jobs)
+  // 大部分瓦片失败就不值得用（会是一张半黑图）
+  if (okCount < gridW * gridH * 0.6) return null
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.needsUpdate = true
+  return tex
 }
 
 // 造一张 1x1 的纯色占位贴图：贴图缺失时喂给 sampler，
@@ -347,34 +547,88 @@ onMounted(() => {
   const DEFAULT_GEO: GeoResult = { lat: 35.5, lon: 104, countryCode: 'CN' } // 兜底：中国中心
   let geo: GeoResult = DEFAULT_GEO
   let geoReady = false
-  let ring: any
 
   // 相机距离按「地球占屏宽的比例」算，且随屏幕宽高比自适应。
+  // 相机距离按「屏幕上能看到的经度跨度」算。
   //
-  // 踩过的坑：PerspectiveCamera(fov, aspect) 的 fov 是【垂直】张角。
-  // 宽屏（2:1）下水平张角远大于垂直张角（45° 垂直 → 80° 水平），
-  // 若按垂直 FOV 算距离，宽屏上地球只占屏宽 76%，看起来明显偏小。
+  // 踩过的坑（三次，前两次都错）：
+  //  1) 按垂直 FOV 算 → 宽屏上地球只占屏宽 76%，显小；
+  //  2) 按水平 FOV 占屏宽 95% → 2:1 屏高只有屏宽一半，地球上下全出画，
+  //     且能看到约 50 度经度，仍是"整个中国"而不是"一个省"；
+  //  3) 用 d = 1/sin(span/2) 近似 → 这是错的，正确解要求射线-球求交。
   //
-  // 正确做法：用水平张角反算，让地球占屏宽的固定比例（GLOBE_WIDTH_FRAC），
-  // 这样 2:1、16:9、16:10、方屏下视觉大小都一致。
-  const cameraDistanceForWidthFrac = (widthFrac: number, fovV: number, aspect: number) => {
+  // 正确推导（世界系，相机在 (0,0,d) 看向地心，聚焦点位于世界 +Z）：
+  //   屏幕边缘视线在 y=0 平面内，与 -Z 轴夹角 θ = fovH/2：
+  //     point = (t·sinθ, 0, d - t·cosθ)，|point|² = 1
+  //     t = d·cosθ - √(1 - d²sin²θ)
+  //   该点的经度相对聚焦点偏移 φ = atan2(x, z)（+X 方向为经度增加 90°）。
+  //   令 φ = span/2 反解 d 即可。
+  //
+  // 实测（见 verify-region.mjs）：d=1.10 时 2:1 屏可见 9.96°、16:9 可见 8.70°，
+  // 即"一个省"的量级，且随宽高比自适应 —— 宽屏看到更宽，符合直觉。
+  const cameraDistanceForLonSpan = (lonSpanDeg: number, fovV: number, aspect: number) => {
+    const target = lonSpanDeg * (Math.PI / 180) // 目标全跨度（弧度），与 spanAt 同基准
     const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect)
-    return RADIUS_REF / Math.sin((fovH * widthFrac) / 2)
+    const theta = fovH / 2
+    // 解析解：由 φ = atan2(x, z) = target，代入求交公式可解出 d。
+    //   x = t·sinθ,  z = d - t·cosθ
+    //   tan(φ) = x/z  =>  t·sinθ = (d - t·cosθ)·tanφ
+    //   =>  t = d·tanφ / (sinθ + cosθ·tanφ)
+    //  代入 t = d·cosθ - √(1 - d²sin²θ) 后整理得：
+    //   d² (sin²θ + cos²θ·tan²φ/(sinθ+cosθtanφ)² ...) 太繁，改用数值法（稳定且足够快）。
+    // 数值法：d 单调 → 跨度单调减小，二分求交。
+    let lo = 1.0001
+    let hi = 1 / Math.sin(theta) // 球体恰好填满 FOV 的距离，再远屏幕边缘就空了
+    const spanAt = (d: number) => {
+      const s = Math.sin(theta)
+      const disc = 1 - d * d * s * s
+      if (disc < 0) return null
+      const t = d * Math.cos(theta) - Math.sqrt(disc)
+      return 2 * Math.atan2(t * s, d - t * Math.cos(theta))
+    }
+    for (let i = 0; i < 80; i++) {
+      const mid = (lo + hi) / 2
+      const span = spanAt(mid)
+      // spanAt 返回的是【全跨度】。跨度随 d 单调递增：
+      //   相机贴近球面 → 只看到很小一块；相机远离 → 看到大半个球。
+      // 所以跨度不够就拉远（抬 lo），跨度过大就拉近（压 hi）。
+      if (span === null) hi = mid // 边缘射线打不到球：相机太远
+      else if (span < target) lo = mid
+      else hi = mid
+    }
+    return (lo + hi) / 2
   }
 
+  // URL 参数覆盖定位结果：?lat=22.54&lon=114.06
+  // 便于调试与验收（测试环境 IP 定位服务常被限流，看不到真实效果）。
+  const urlOverride = (() => {
+    try {
+      const q = new URLSearchParams(window.location.search)
+      const lat = parseFloat(q.get('lat') || '')
+      const lon = parseFloat(q.get('lon') || '')
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        return { lat: Math.max(-90, Math.min(90, lat)), lon: ((lon + 180) % 360) - 180 }
+      }
+    } catch {
+      /* ignore */
+    }
+    return null
+  })()
+
   const boot = async () => {
-    // 定位与 three.js 并行拉（不阻塞）
+    // 定位与 three.js 并行拉（不阻塞）；URL 参数优先
     const [THREE, geoResult] = await Promise.all([loadThree(), getGeoLocation()])
     if (disposed) return
-    if (geoResult) geo = geoResult
+    if (urlOverride) geo = urlOverride
+    else if (geoResult) geo = geoResult
 
-    // 计算目标朝向；相机距离按「地球占屏宽的比例」算，随宽高比自适应，
-    // 保证 2:1 / 16:9 / 16:10 / 方屏下视觉大小一致。
+    // 计算目标朝向；相机距离按「屏幕可见经度跨度」算，随宽高比自适应，
+    // 目标是让画面上主要就是访客所在的那个省。
     const target = focusOn(geo.lat, geo.lon)
     targetRotX = target.rotX
     targetRotY = target.rotY
     const aspect = (wrap.clientWidth || window.innerWidth) / (wrap.clientHeight || window.innerHeight)
-    targetCameraZ = cameraDistanceForWidthFrac(GLOBE_WIDTH_FRAC, (45 * Math.PI) / 180, aspect)
+    targetCameraZ = cameraDistanceForLonSpan(TARGET_LON_SPAN, (45 * Math.PI) / 180, aspect)
     // 起个慢动作：从远拉近 + 旋转到目标
     cameraZ = targetCameraZ + 1.2 // 从更远一点开始，拉近动画更明显
     rotX = targetRotX
@@ -392,17 +646,31 @@ onMounted(() => {
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 200)
     camera.position.z = cameraZ
 
-    // 远端低清图与区域高清图并行拉：任一方失败都不阻塞另一方
-    const [tex, region] = await Promise.all([
-      loadTextures(THREE),
-      loadRegionImage(THREE, geo.lat, geo.lon),
-    ])
+    // 加载超时兜底：任何一路挂起都不能让整球一直转圈。
+    const withTotalTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
+      new Promise((resolve) => {
+        const t = setTimeout(() => resolve(null), ms)
+        p.then((v) => { clearTimeout(t); resolve(v) },
+               () => { clearTimeout(t); resolve(null) })
+      })
+
+    // 阶段一：只等核心昼图（决定能否出 3D）。20 秒兜底，超时即降级。
+    const dayTex = await withTotalTimeout(loadCoreDayTexture(THREE), 20000)
     if (disposed) return
-    if (!tex) {
+    if (!dayTex) {
       fallbackReason.value = 'load-failed'
       return
     }
+    const tex: Record<string, any> = { day: dayTex }
+
+    // 区域高清图（昼/夜）也并行拿，但同样限时，拿不到就用整球图
+    const [region, nightRegion] = await Promise.all([
+      withTotalTimeout(loadRegionImage(THREE, geo.lat, geo.lon), 20000),
+      withTotalTimeout(loadNightRegion(THREE, geo.lat, geo.lon), 15000),
+    ])
+    if (disposed) return
     if (region) tex.region = region
+    if (nightRegion) tex.nightRegion = nightRegion
 
     const RADIUS = 1
 
@@ -436,20 +704,31 @@ onMounted(() => {
     const hasNormal = !!tex.normal
     const hasSpec = !!tex.specular
     const hasRegion = !!tex.region
+    const hasNightRegion = !!tex.nightRegion
     const earthMat = new THREE.ShaderMaterial({
       uniforms: {
         dayTex: { value: tex.day },
         nightTex: { value: tex.night || tex.day },
         normalTex: { value: tex.normal || placeholderTexture(THREE, [128, 128, 255]) },
         specTex: { value: tex.specular || placeholderTexture(THREE, [0, 0, 0]) },
-        // 局部高清区域图：加载成功时 regionTex 有值、uvOffset/uvScale 有定义，
-        // shader 里只在 UV 落在该区域内时用它替换低清整球图。
+        // 局部高清昼间卫星图：UV 落在区域内时替换低清整球图
         regionTex: {
           value: tex.region?.texture || placeholderTexture(THREE, [0, 0, 0]),
         },
         regionUvOffset: { value: new THREE.Vector2(...(tex.region?.uvOffset || [0, 0])) },
         regionUvScale: { value: new THREE.Vector2(...(tex.region?.uvScale || [0, 0])) },
         useRegion: { value: hasRegion ? 1 : 0 },
+        // 局部高清夜间灯光图（GIBS 瓦片拼接，114 px/度）
+        nightRegionTex: {
+          value: tex.nightRegion?.texture || placeholderTexture(THREE, [0, 0, 0]),
+        },
+        nightRegionUvOffset: {
+          value: new THREE.Vector2(...(tex.nightRegion?.uvOffset || [0, 0])),
+        },
+        nightRegionUvScale: {
+          value: new THREE.Vector2(...(tex.nightRegion?.uvScale || [0, 0])),
+        },
+        useNightRegion: { value: hasNightRegion ? 1 : 0 },
         sunDir: { value: new THREE.Vector3(1, 0, 0) },
         normalScale: { value: new THREE.Vector2(0.85, 0.85) },
         useNormal: { value: hasNormal ? 1 : 0 },
@@ -478,6 +757,10 @@ onMounted(() => {
         uniform vec2 regionUvOffset;
         uniform vec2 regionUvScale;
         uniform float useRegion;
+        uniform sampler2D nightRegionTex;
+        uniform vec2 nightRegionUvOffset;
+        uniform vec2 nightRegionUvScale;
+        uniform float useNightRegion;
         uniform vec3 sunDir;
         uniform vec2 normalScale;
         uniform float useNormal;
@@ -493,41 +776,60 @@ onMounted(() => {
           vec2 nOff = (texture2D(normalTex, vUv).xy * 2.0 - 1.0) * normalScale * useNormal;
           vec3 perturbNormal = normalize(n + vec3(nOff * 0.35, 0.0));
 
-          // ---- 局部高清区域图 ----
-          // 设计取舍：region 图是白天的卫星照片。若按 dayAmount 淡入，
-          // 夜里区域会退回低清灯光图 —— 而「访客所在地要看得清」这个
-          // 核心诉求在夜晚就失效了（中国用户多数访问时段是晚上）。
-          // 所以 region 始终显示，只做昼夜调色：
-          //   白天   → 原色
-          //   黄昏   → 叠暖色（和整球晨昏线一致）
-          //   夜里   → 压暗 + 叠冷蓝，保留清晰度但不违反"现在是晚上"的观感
-          vec3 dayColor = texture2D(dayTex, vUv).rgb;
-          vec3 nightColor = texture2D(nightTex, vUv).rgb * 1.7;
-
           vec3 sunDirN = normalize(sunDir);
           float diff = dot(perturbNormal, sunDirN);
           float dayAmount = smoothstep(-0.12, 0.22, diff);
 
+          // 整球的昼/夜基础色（低清，作为区域外的兜底）
+          vec3 dayColor = texture2D(dayTex, vUv).rgb;
+          vec3 nightColor = texture2D(nightTex, vUv).rgb * 1.7;
+          vec3 color = mix(nightColor, dayColor, dayAmount);
+
           // 晨昏线：diff 接近 0 时叠日落暖色，且只在昼侧
           float twilight = 1.0 - smoothstep(0.0, 0.22, abs(diff));
-          vec3 color = mix(nightColor, dayColor, dayAmount);
           color += vec3(0.95, 0.55, 0.25) * (twilight * dayAmount * 0.35);
 
-          // region 高清图：始终可见，按昼夜调色
-          if (useRegion > 0.5) {
-            vec2 localUv = (vUv - regionUvOffset) / regionUvScale;
-            float inside = step(0.0, localUv.x) * step(localUv.x, 1.0)
-                         * step(0.0, localUv.y) * step(localUv.y, 1.0);
-            if (inside > 0.5) {
-              vec3 regionColor = texture2D(regionTex, localUv).rgb;
-              // 夜间调色：压暗到 45% 并叠冷蓝，白天保持原色，
-              // 晨昏线附近平滑过渡（和整球的 dayAmount 同步）
-              float nightDim = mix(1.0, 0.45, 1.0 - dayAmount);
-              vec3 nightTint = vec3(0.55, 0.65, 0.95);
-              regionColor *= nightDim;
-              regionColor = mix(regionColor, regionColor * nightTint, (1.0 - dayAmount) * 0.45);
-              color = mix(color, regionColor, inside);
-            }
+          // ---- 访客所在区域的高清图 ----
+          // 昼间用 ArcGIS 卫星图，夜间用 GIBS VIIRS 城市灯光图（114 px/度）。
+          // 两者按 dayAmount 交叉淡入：白天卫星、夜里灯光、晨昏线平滑过渡。
+          // 这样既保证「访客所在地看得清」，夜间也不会出现清晰度断层。
+          if (useRegion > 0.5 || useNightRegion > 0.5) {
+            // 昼间区域图的局部 UV
+            vec2 dayLocal = (vUv - regionUvOffset) / regionUvScale;
+            float dayInside = step(0.0, dayLocal.x) * step(dayLocal.x, 1.0)
+                            * step(0.0, dayLocal.y) * step(dayLocal.y, 1.0)
+                            * useRegion;
+            // 夜间灯光区域图的局部 UV（瓦片对齐后的范围可能略大于昼间图）
+            vec2 nightLocal = (vUv - nightRegionUvOffset) / nightRegionUvScale;
+            float nightInside = step(0.0, nightLocal.x) * step(nightLocal.x, 1.0)
+                              * step(0.0, nightLocal.y) * step(nightLocal.y, 1.0)
+                              * useNightRegion;
+
+            // 关键：昼图/夜图有【各自的】覆盖范围（夜灯按瓦片对齐，通常略大），
+            // 必须各用各的边界和羽化权重，否则会出现「夜灯没叠上去」或
+            // 「硬边界方块」。
+            vec3 regionDay = texture2D(regionTex, clamp(dayLocal, 0.0, 1.0)).rgb;
+            vec3 regionNight = texture2D(nightRegionTex, clamp(nightLocal, 0.0, 1.0)).rgb;
+
+            // 昼图羽化（区域内侧 10% 平滑过渡到整球图）
+            vec2 dEdge = min(dayLocal, 1.0 - dayLocal);
+            float dFeather = smoothstep(0.0, 0.18, min(dEdge.x, dEdge.y)) * useRegion;
+            // 夜灯图羽化（同样处理，独立边界）
+            vec2 nEdge = min(nightLocal, 1.0 - nightLocal);
+            float nFeather = smoothstep(0.0, 0.18, min(nEdge.x, nEdge.y)) * useNightRegion;
+
+            // 白天的区域色：有昼图用昼图，否则保持整球色
+            vec3 dayBase = mix(color, regionDay, dFeather);
+
+            // 夜间的区域色：不能只用灯光图 —— 纯灯光图没有地形细节，
+            // 整片会发灰发蓝。做法是「卫星图压暗」当底 + 灯光提亮：
+            //   底色 = 卫星图 * 0.30（保留海岸线与地貌层次）
+            //   灯光 = 夜灯图 * 2.2（城市亮起）
+            // 昼图缺失时底色退回整球色，仍然可读。
+            vec3 nightSat = mix(color, regionDay * 0.30, dFeather);
+            vec3 nightBase = nightSat + regionNight * 2.2 * nFeather;
+
+            color = mix(nightBase, dayBase, dayAmount);
           }
 
           // 海洋镜面高光（specTex.r > 0.5 视为海面）
@@ -548,18 +850,18 @@ onMounted(() => {
     scene.add(globe)
 
     // ===== 云层（独立球，稍大、自转更快 → 云飘动）=====
-    if (tex.clouds) {
-      cloudLayer = new THREE.Mesh(
-        new THREE.SphereGeometry(RADIUS * 1.015, 64, 64),
-        new THREE.MeshLambertMaterial({
-          map: tex.clouds,
-          transparent: true,
-          opacity: 0.45,
-          depthWrite: false,
-        }),
-      )
-      scene.add(cloudLayer)
-    }
+    // 始终创建，贴图后到再补（非核心资源不该阻塞首屏）
+    cloudLayer = new THREE.Mesh(
+      new THREE.SphereGeometry(RADIUS * 1.015, 64, 64),
+      new THREE.MeshLambertMaterial({
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+        visible: !!tex.clouds,
+        map: tex.clouds || null,
+      }),
+    )
+    scene.add(cloudLayer)
 
     // ===== 内部柔和光晕（紧贴地球）=====
     glow = new THREE.Mesh(
@@ -595,35 +897,64 @@ onMounted(() => {
     pinRoot.quaternion.setFromUnitVectors(up, normal)
     pinGroup.add(pinRoot)
 
-    // --- 画图钉贴图（128x192：上圆头、中细针、下阴影）---
+    // --- 画图钉贴图 ---
+    // 造型参考 Apple Maps 图钉：圆头有明确的高光与暗边（球体感），
+    // 细针上细下粗并带渐变（金属感），底部一个小阴影让它"扎"在地表。
+    // 画布用高分辨率（256x384）再缩放到 PIN_SCREEN_H，避免边缘锯齿。
     const pinCanvas = document.createElement('canvas')
     pinCanvas.width = PIN_CANVAS_W
     pinCanvas.height = PIN_CANVAS_H
     const pc = pinCanvas.getContext('2d')!
-    // 底部柔和阴影
-    pc.fillStyle = 'rgba(0,0,0,0.32)'
+    const CX = PIN_CANVAS_W / 2
+    const BASE_Y = PIN_CANVAS_H - 8 // 针底位置
+    const HEAD_R = 46 // 圆头半径
+    const HEAD_CY = BASE_Y - 118 // 圆头中心
+    const NEEDLE_TOP = HEAD_CY + HEAD_R * 0.55 // 针顶端（接入圆头）
+    const NEEDLE_HALF_BOTTOM = 15 // 针底半宽
+    const NEEDLE_HALF_TOP = 5 // 针顶半宽
+
+    // 底部阴影（小而收敛，不要摊一大片）
+    pc.fillStyle = 'rgba(0,0,0,0.28)'
     pc.beginPath()
-    pc.ellipse(64, 184, 26, 8, 0, 0, Math.PI * 2)
+    pc.ellipse(CX, BASE_Y + 3, 22, 6, 0, 0, Math.PI * 2)
     pc.fill()
-    // 细针：上细下粗的锥形
-    const grad = pc.createLinearGradient(0, 184, 0, 70)
-    grad.addColorStop(0, '#7d1a1a')
-    grad.addColorStop(1, '#c0392b')
-    pc.fillStyle = grad
+
+    // 细针：上细下粗的锥形，暗红 → 亮红渐变（受光感）
+    const needleGrad = pc.createLinearGradient(0, BASE_Y, 0, NEEDLE_TOP)
+    needleGrad.addColorStop(0, '#8e1b1b')
+    needleGrad.addColorStop(1, '#d63c2f')
+    pc.fillStyle = needleGrad
     pc.beginPath()
-    pc.moveTo(64, 70)
-    pc.lineTo(56, 184)
-    pc.lineTo(72, 184)
+    pc.moveTo(CX - NEEDLE_HALF_TOP, NEEDLE_TOP)
+    pc.lineTo(CX - NEEDLE_HALF_BOTTOM, BASE_Y)
+    pc.lineTo(CX + NEEDLE_HALF_BOTTOM, BASE_Y)
+    pc.lineTo(CX + NEEDLE_HALF_TOP, NEEDLE_TOP)
     pc.closePath()
     pc.fill()
-    // 圆头 + 高光
-    pc.fillStyle = '#e8453c'
+
+    // 圆头：主体径向渐变（左上受光 → 右下暗部，做出球体感）
+    const headGrad = pc.createRadialGradient(
+      CX - HEAD_R * 0.35, HEAD_CY - HEAD_R * 0.4, HEAD_R * 0.15,
+      CX, HEAD_CY, HEAD_R,
+    )
+    headGrad.addColorStop(0, '#ff7a6b')
+    headGrad.addColorStop(0.45, '#e8453c')
+    headGrad.addColorStop(1, '#a3201a')
+    pc.fillStyle = headGrad
     pc.beginPath()
-    pc.arc(64, 62, 30, 0, Math.PI * 2)
+    pc.arc(CX, HEAD_CY, HEAD_R, 0, Math.PI * 2)
     pc.fill()
-    pc.fillStyle = 'rgba(255,255,255,0.35)'
+
+    // 圆头高光（小而集中，像玻璃珠）
+    pc.fillStyle = 'rgba(255,255,255,0.55)'
     pc.beginPath()
-    pc.arc(54, 52, 10, 0, Math.PI * 2)
+    pc.ellipse(CX - HEAD_R * 0.34, HEAD_CY - HEAD_R * 0.42, HEAD_R * 0.22, HEAD_R * 0.15, -0.5, 0, Math.PI * 2)
+    pc.fill()
+
+    // 圆头底部一点环境光反射，增强立体感
+    pc.fillStyle = 'rgba(255,180,150,0.25)'
+    pc.beginPath()
+    pc.arc(CX, HEAD_CY + HEAD_R * 0.45, HEAD_R * 0.55, 0.15 * Math.PI, 0.85 * Math.PI)
     pc.fill()
 
     const pinTex = new THREE.CanvasTexture(pinCanvas)
@@ -643,34 +974,8 @@ onMounted(() => {
       canvasH: PIN_CANVAS_H,
     }
 
-    // --- 插入点的柔和阴影圈，让图钉「扎」在地表上而不是浮着 ---
-    const baseShadow = new THREE.Mesh(
-      new THREE.CircleGeometry(RADIUS * 0.045, 24),
-      new THREE.MeshBasicMaterial({
-        color: 0x000000,
-        transparent: true,
-        opacity: 0.35,
-        depthWrite: false,
-      }),
-    )
-    baseShadow.rotation.x = -Math.PI / 2 // 平面朝上（+Y）
-    baseShadow.position.y = RADIUS * 0.001
-    pinRoot.add(baseShadow)
-
-    // --- 脉冲光环：平铺在地表，标记准确位置 ---
-    ring = new THREE.Mesh(
-      new THREE.RingGeometry(RADIUS * 0.035, RADIUS * 0.048, 48),
-      new THREE.MeshBasicMaterial({
-        color: 0xe8453c,
-        transparent: true,
-        opacity: 0.6,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
-    )
-    ring.rotation.x = -Math.PI // 平铺在地表
-    ring.position.y = RADIUS * 0.002
-    pinRoot.add(ring)
+    // 注：不再额外放地表阴影圈和脉冲光环。图钉贴图自带底部阴影，
+    // 再叠一个黑色圆盘会显脏；脉冲光环在聚焦到这个尺度后也显得多余。
 
     scene.add(pinGroup)
 
@@ -713,13 +1018,9 @@ onMounted(() => {
       renderer.setSize(nw, nh, false)
       camera.aspect = nw / nh
       camera.updateProjectionMatrix()
-      // 宽高比变了要重算目标距离，否则竖屏/方屏下地球会忽大忽小
+      // 宽高比变了要重算目标距离，否则窗口变化后可见范围会漂
       if (geoReady) {
-        targetCameraZ = cameraDistanceForWidthFrac(
-          GLOBE_WIDTH_FRAC,
-          (45 * Math.PI) / 180,
-          nw / nh,
-        )
+        targetCameraZ = cameraDistanceForLonSpan(TARGET_LON_SPAN, (45 * Math.PI) / 180, nw / nh)
       }
     }
     window.addEventListener('resize', resize)
@@ -743,7 +1044,6 @@ onMounted(() => {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
 
-    let ringPhase = 0
     // 复用的太阳方向向量（避免每帧分配）
     const sunVec = new (window as any).THREE.Vector3()
     const tick = () => {
@@ -801,8 +1101,9 @@ onMounted(() => {
         const h = PIN_SCREEN_H * perPixel
         const w = h * (pinSpriteRef.canvasW / pinSpriteRef.canvasH)
         pinSpriteRef.sprite.scale.set(w, h, 1)
-        // 针底对齐地表：canvas 针底在 y=184，v 轴以画布底部为 0，
-        // 故 v_base = (192-184)/192 = 0.0417，需上移 (0.5 - v_base) * h
+        // 针底对齐地表：three.js 纹理 v 轴以画布底部为 0，
+        // 故 v_base = (canvasH - needleBaseY) / canvasH，
+        // 需把精灵上移 (0.5 - v_base) * h 让针底正好落在 y=0
         const vBase = (pinSpriteRef.canvasH - PIN_NEEDLE_BASE_Y) / pinSpriteRef.canvasH
         pinSpriteRef.sprite.position.y = (0.5 - vBase) * h
       }
@@ -827,12 +1128,6 @@ onMounted(() => {
       ;(earthMat.uniforms.sunDir as any).value.copy(sunVec)
       sunLight.position.copy(sunVec).multiplyScalar(5)
 
-      // pin 脉冲细环（半径 + 透明度周期性变化，幅度小不突兀）
-      ringPhase = (ringPhase + 0.025) % (Math.PI * 2)
-      const pulse = 0.5 + 0.5 * Math.sin(ringPhase)
-      ;(ring as any).scale.setScalar(0.7 + pulse * 0.6)
-      ;(ring.material as any).opacity = 0.6 - pulse * 0.35
-
       // 视差：相机随鼠标轻微位移（不影响聚焦）
       camera.position.x += (mouse.x * 0.08 - camera.position.x) * 0.03
       camera.position.y += (-mouse.y * 0.08 - camera.position.y) * 0.03
@@ -842,6 +1137,31 @@ onMounted(() => {
       frameId = requestAnimationFrame(tick)
     }
     tick()
+
+    // ===== 非核心贴图：场景已跑起来后异步补，不阻塞首屏 =====
+    // 夜灯（决定夜间观感）/ 云 / 法线 / 镜面，哪张先到就先挂上。
+    loadOptionalTextures(THREE).then((opt) => {
+      if (disposed) return
+      if (opt.night) {
+        ;(earthMat.uniforms.nightTex as any).value = opt.night
+      }
+      if (opt.normal) {
+        ;(earthMat.uniforms.normalTex as any).value = opt.normal
+        ;(earthMat.uniforms.useNormal as any).value = 1
+      }
+      if (opt.specular) {
+        ;(earthMat.uniforms.specTex as any).value = opt.specular
+        ;(earthMat.uniforms.useSpec as any).value = 1
+      }
+      if (opt.clouds && cloudLayer) {
+        ;(cloudLayer.material as any).map = opt.clouds
+        ;(cloudLayer.material as any).needsUpdate = true
+        ;(cloudLayer.material as any).visible = true
+        cloudLayer.visible = true
+      }
+    }).catch(() => {
+      /* 非核心资源失败不影响已渲染的地球 */
+    })
 
     ;(wrap as any)._cleanup = () => {
       cancelAnimationFrame(frameId)
