@@ -56,6 +56,18 @@ const REGION_LAT_SPAN = 44
 const REGION_WIDTH = 2048
 const REGION_HEIGHT = 2048
 
+// 图钉在屏幕上的目标高度（CSS 像素）。Sprite 按屏幕尺寸呈现，
+// 所以这个值是恒定的，不受相机距离 / DPR / 画布大小影响。
+const PIN_SCREEN_H = 34
+// 图钉画布尺寸（宽 x 高），针底画在 canvas y=184
+const PIN_CANVAS_W = 128
+const PIN_CANVAS_H = 192
+const PIN_NEEDLE_BASE_Y = 184
+
+// 地球占屏宽的目标比例。宽屏下这决定视觉大小；
+// 0.95 表示地球直径接近屏宽（上下会被裁掉一部分，符合"放大"的诉求）。
+const GLOBE_WIDTH_FRAC = 0.95
+
 // 地球半径基准（与渲染用 SphereGeometry 的 radius 一致）
 const RADIUS_REF = 1
 
@@ -317,6 +329,7 @@ onMounted(() => {
   let renderer: any, scene: any, camera: any
   let globe: any, cloudLayer: any, glow: any, stars: any, atmo: any
   let pinGroupRef: any
+  let pinSpriteRef: { sprite: any; canvasW: number; canvasH: number } | null = null
   let sunLight: any
   let frameId = 0
   let dragging = false
@@ -336,11 +349,17 @@ onMounted(() => {
   let geoReady = false
   let ring: any
 
-  // 按「地球占垂直 FOV 的比例」算相机距离。
-  // d = R / sin(FOV*frac/2)。frac 越大 → 相机越近 → 地球越大。
-  // 旧版 COUNTRY_ZOOM['CN']=2.1 对应约 126%；这里取 1.35 略大一些。
-  const cameraDistanceForFovFrac = (frac: number, fovRad: number) => {
-    return RADIUS_REF / Math.sin((fovRad * frac) / 2)
+  // 相机距离按「地球占屏宽的比例」算，且随屏幕宽高比自适应。
+  //
+  // 踩过的坑：PerspectiveCamera(fov, aspect) 的 fov 是【垂直】张角。
+  // 宽屏（2:1）下水平张角远大于垂直张角（45° 垂直 → 80° 水平），
+  // 若按垂直 FOV 算距离，宽屏上地球只占屏宽 76%，看起来明显偏小。
+  //
+  // 正确做法：用水平张角反算，让地球占屏宽的固定比例（GLOBE_WIDTH_FRAC），
+  // 这样 2:1、16:9、16:10、方屏下视觉大小都一致。
+  const cameraDistanceForWidthFrac = (widthFrac: number, fovV: number, aspect: number) => {
+    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect)
+    return RADIUS_REF / Math.sin((fovH * widthFrac) / 2)
   }
 
   const boot = async () => {
@@ -349,15 +368,13 @@ onMounted(() => {
     if (disposed) return
     if (geoResult) geo = geoResult
 
-    // 计算目标朝向；相机距离按「访客所在区域」的可见弧度算，
-    // 让区域图占屏约 65%，近处细节足够大又不裁掉边缘。
+    // 计算目标朝向；相机距离按「地球占屏宽的比例」算，随宽高比自适应，
+    // 保证 2:1 / 16:9 / 16:10 / 方屏下视觉大小一致。
     const target = focusOn(geo.lat, geo.lon)
     targetRotX = target.rotX
     targetRotY = target.rotY
-    // 相机距离：让地球占垂直 FOV 的 135%（旧版中国是 126%），更大一些。
-    // 注意：区域图占地球的比例（约 46%）与相机距离无关，只由区域跨度决定；
-    // 想「看得更局部」要缩小 REGION_LON_SPAN，而不是拉近相机。
-    targetCameraZ = cameraDistanceForFovFrac(1.35, (45 * Math.PI) / 180)
+    const aspect = (wrap.clientWidth || window.innerWidth) / (wrap.clientHeight || window.innerHeight)
+    targetCameraZ = cameraDistanceForWidthFrac(GLOBE_WIDTH_FRAC, (45 * Math.PI) / 180, aspect)
     // 起个慢动作：从远拉近 + 旋转到目标
     cameraZ = targetCameraZ + 1.2 // 从更远一点开始，拉近动画更明显
     rotX = targetRotX
@@ -477,11 +494,13 @@ onMounted(() => {
           vec3 perturbNormal = normalize(n + vec3(nOff * 0.35, 0.0));
 
           // ---- 局部高清区域图 ----
-          // 关键：不能把 region 图直接当 dayColor 用。region 是一张「白天」
-          // 卫星照片，若在夜侧整体替换 dayColor，夜里 region 内会从高清
-          // 卫星图突然跳成低清夜间灯光图，边界非常明显。
-          // 做法：region 图按 dayAmount 混入最终颜色，夜侧自动淡出，
-          // 昼侧全量显示，晨昏线平滑过渡，和整球行为完全一致。
+          // 设计取舍：region 图是白天的卫星照片。若按 dayAmount 淡入，
+          // 夜里区域会退回低清灯光图 —— 而「访客所在地要看得清」这个
+          // 核心诉求在夜晚就失效了（中国用户多数访问时段是晚上）。
+          // 所以 region 始终显示，只做昼夜调色：
+          //   白天   → 原色
+          //   黄昏   → 叠暖色（和整球晨昏线一致）
+          //   夜里   → 压暗 + 叠冷蓝，保留清晰度但不违反"现在是晚上"的观感
           vec3 dayColor = texture2D(dayTex, vUv).rgb;
           vec3 nightColor = texture2D(nightTex, vUv).rgb * 1.7;
 
@@ -494,15 +513,20 @@ onMounted(() => {
           vec3 color = mix(nightColor, dayColor, dayAmount);
           color += vec3(0.95, 0.55, 0.25) * (twilight * dayAmount * 0.35);
 
-          // region 高清图按 dayAmount 淡入，避免夜侧出现清晰度断层
+          // region 高清图：始终可见，按昼夜调色
           if (useRegion > 0.5) {
             vec2 localUv = (vUv - regionUvOffset) / regionUvScale;
             float inside = step(0.0, localUv.x) * step(localUv.x, 1.0)
                          * step(0.0, localUv.y) * step(localUv.y, 1.0);
             if (inside > 0.5) {
               vec3 regionColor = texture2D(regionTex, localUv).rgb;
-              // dayAmount 权重让 region 只在白天显现；晨昏线处自然过渡
-              color = mix(color, regionColor, inside * dayAmount);
+              // 夜间调色：压暗到 45% 并叠冷蓝，白天保持原色，
+              // 晨昏线附近平滑过渡（和整球的 dayAmount 同步）
+              float nightDim = mix(1.0, 0.45, 1.0 - dayAmount);
+              vec3 nightTint = vec3(0.55, 0.65, 0.95);
+              regionColor *= nightDim;
+              regionColor = mix(regionColor, regionColor * nightTint, (1.0 - dayAmount) * 0.45);
+              color = mix(color, regionColor, inside);
             }
           }
 
@@ -573,8 +597,8 @@ onMounted(() => {
 
     // --- 画图钉贴图（128x192：上圆头、中细针、下阴影）---
     const pinCanvas = document.createElement('canvas')
-    pinCanvas.width = 128
-    pinCanvas.height = 192
+    pinCanvas.width = PIN_CANVAS_W
+    pinCanvas.height = PIN_CANVAS_H
     const pc = pinCanvas.getContext('2d')!
     // 底部柔和阴影
     pc.fillStyle = 'rgba(0,0,0,0.32)'
@@ -603,13 +627,6 @@ onMounted(() => {
     pc.fill()
 
     const pinTex = new THREE.CanvasTexture(pinCanvas)
-    // Sprite 的 scale 是世界单位。屏幕上高度 H 像素 ≈ 世界高度
-    //   2 * d * tan(fov/2) * H / viewportH
-    // d≈2（相机距）、fov=45°、viewportH=720 时系数 ≈ 0.0037。
-    // 取 46px 目标高度 → scale.y ≈ 0.17；x 按画布宽高比折算。
-    const PIN_SCREEN_H = 46
-    const spriteH = PIN_SCREEN_H * 0.0037
-    const spriteW = spriteH * (pinCanvas.width / pinCanvas.height)
     const pinSprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: pinTex,
@@ -617,15 +634,14 @@ onMounted(() => {
         depthTest: true, // 转到地球背面时被自身遮挡，自然消失
       }),
     )
-    pinSprite.scale.set(spriteW, spriteH, 1)
-    // Sprite 中心即锚点，且始终面向相机（这正是 Apple Maps 图钉的观感）。
-    // 画布 192 高，针底画在 canvas y=184；three.js 的纹理 v 轴是
-    // 「canvas 底部 = v=0」，所以针底对应 v = (192-184)/192 = 0.0417。
-    // 要让针底落在表决上（pinRoot 局部 y=0），需把精灵上移：
-    //   position.y = (0.5 - v_base) * scale.y ≈ 0.458 * scale.y
-    // （曾误把方向写反，导致图钉被推到地表以下完全看不见）
-    pinSprite.position.y = (0.5 - (pinCanvas.height - 184) / pinCanvas.height) * spriteH
+    // 尺寸不在这里设死，交给 tick 每帧按「屏幕像素恒定」刷新，
+    // 否则高分屏（DPR=2）下物理尺寸会翻倍，相机距离一变大小也漂。
     pinRoot.add(pinSprite)
+    pinSpriteRef = {
+      sprite: pinSprite,
+      canvasW: PIN_CANVAS_W,
+      canvasH: PIN_CANVAS_H,
+    }
 
     // --- 插入点的柔和阴影圈，让图钉「扎」在地表上而不是浮着 ---
     const baseShadow = new THREE.Mesh(
@@ -697,6 +713,14 @@ onMounted(() => {
       renderer.setSize(nw, nh, false)
       camera.aspect = nw / nh
       camera.updateProjectionMatrix()
+      // 宽高比变了要重算目标距离，否则竖屏/方屏下地球会忽大忽小
+      if (geoReady) {
+        targetCameraZ = cameraDistanceForWidthFrac(
+          GLOBE_WIDTH_FRAC,
+          (45 * Math.PI) / 180,
+          nw / nh,
+        )
+      }
     }
     window.addEventListener('resize', resize)
 
@@ -761,6 +785,26 @@ onMounted(() => {
         // （不要直接改 pinRoot.rotation，会和 quaternion 冲突）
         pinGroupRef.rotation.y = rotY
         pinGroupRef.rotation.x = rotX
+      }
+
+      // 图钉尺寸：按屏幕像素恒定，与相机距离 / DPR / 画布大小无关。
+      // 世界单位 → 屏幕像素的换算：
+      //   屏幕高 H_px 对应的世界高度 = 2 * d * tan(fov/2)
+      //   （d 为相机到地心的距离，fov 为垂直张角）
+      if (pinSpriteRef) {
+        const d = camera.position.length()
+        const worldH = 2 * d * Math.tan((camera.fov * Math.PI) / 360)
+        // camera.fov 是垂直张角；drawingBufferHeight 是物理像素，
+        // 而 PIN_SCREEN_H 想要的是 CSS 像素，所以除以 pixelRatio。
+        const cssH = wrap.clientHeight || window.innerHeight
+        const perPixel = worldH / cssH
+        const h = PIN_SCREEN_H * perPixel
+        const w = h * (pinSpriteRef.canvasW / pinSpriteRef.canvasH)
+        pinSpriteRef.sprite.scale.set(w, h, 1)
+        // 针底对齐地表：canvas 针底在 y=184，v 轴以画布底部为 0，
+        // 故 v_base = (192-184)/192 = 0.0417，需上移 (0.5 - v_base) * h
+        const vBase = (pinSpriteRef.canvasH - PIN_NEEDLE_BASE_Y) / pinSpriteRef.canvasH
+        pinSpriteRef.sprite.position.y = (0.5 - vBase) * h
       }
 
       // 相机缓动到目标距离（定位拉近动画）
