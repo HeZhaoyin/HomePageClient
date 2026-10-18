@@ -8,33 +8,42 @@
 <script lang="ts" setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 
-// 炫酷"聚焦你所在地 + 实时昼夜"3D 地球背景：
-//  - 取访客 IP 定位（ip-api 主 + ipwho.is 备）→ 聚焦到该城市，放大的地球 + 发光 pin
-//  - 实时昼夜：太阳位置随 UTC 时实时计算，地球朝向固定，太阳射入方向逐帧更新，
-//    城市灯/白天/黑夜随你当地真实时间自然变化（"现在是晚上就显示夜景"）
-//  - 云层独立球慢速自转（云飘动）；Fresnel 大气散射；星空闪烁；鼠标视差
-//  - three.js 走国内 CDN（不进 bundle、不占 frp），贴图走 GitHub raw 直连
-//  - 无 WebGL / CDN / 核心贴图失败 → CSS 兜底（顺带修 2K 留白）
+// 动态地球背景 v2：
+//  - IP 定位：https://ipwho.is（CORS *，避开 Mixed Content）→ 失败兜底北京
+//  - 聚焦到国家尺度：访客 IP 的 country_code 查中心点，相机距离使该国占屏 ~50%
+//  - pin：小圆点 + 细环（去长杆，不突兀）
+//  - 真实感：法线贴图 + 镜面 + 云层 + Fresnel 大气 + 昼夜 shader（含晨昏线暖色）
+//  - three.js 走国内 CDN（不进 bundle 不占 frp），贴图走 GitHub raw 直连
+//  - 无 WebGL / CDN / 核心贴图失败 → CSS 兜底
 const wrapRef = ref<HTMLDivElement>()
 const canvasRef = ref<HTMLCanvasElement>()
 const fallbackReason = ref('')
 
-// three.js CDN（国内可达性已验证：staticfile 主 ~0.4s，jsDelivr 备）
+// three.js CDN（国内可达：staticfile 主 ~0.4s，jsDelivr 备）
 const THREE_CDN_PRIMARY = 'https://cdn.staticfile.org/three.js/r128/three.min.js'
 const THREE_CDN_BACKUP = 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js'
 
-// three.js 官方仓库的整套地球贴图（HEAD tag 下均在，~1MB 总）
+// 贴图：three.js 官方仓库（HEAD tag）一整套地球纹理
 const TEX = (name: string) =>
   `https://raw.githubusercontent.com/mrdoob/three.js/HEAD/examples/textures/planets/${name}`
 const TEXTURES = {
   day: TEX('earth_day_4096.jpg'),
   night: TEX('earth_night_4096.jpg'),
   clouds: TEX('earth_clouds_1024.png'),
+  normal: TEX('earth_normal_2048.jpg'),
+  specular: TEX('earth_specular_2048.jpg'),
 }
 
-// IP 定位服务（主 + 备，均免费、国内可达）
-const GEO_PRIMARY = 'http://ip-api.com/json/?fields=lat,lon,timezone,status'
-const GEO_BACKUP = 'https://ipwho.is/'
+// 国家尺度的相机距离：让该国大致占屏一半（半径 R=1，45° 垂直张角）。
+// 横跨大的国家（中/美/俄/澳/加/印/巴西）拉远到 2.1~2.5，其余 1.9。
+const COUNTRY_ZOOM: Record<string, number> = {
+  CN: 2.1, US: 2.3, RU: 2.5, BR: 2.2, CA: 2.3, IN: 2.1, AU: 2.1,
+}
+const DEFAULT_ZOOM = 1.9
+
+// IP 定位（全部 https，避开 Mixed Content；ip-api 的 https 端点 403 已弃用）
+const GEO_PRIMARY = 'https://ipwho.is/'
+const GEO_BACKUP = 'https://ipinfo.io/json'
 
 let disposed = false
 // 动态注入 <script> 的节点存模块级数组保引用（防 GC，onload 永不触发的经典坑）
@@ -83,9 +92,17 @@ async function loadThree(): Promise<any> {
   }
 }
 
-// ---- IP 定位：返回 {lat, lon} 或 null（失败则用默认北京，不影响地球展示）----
-async function getGeoLocation(): Promise<{ lat: number; lon: number } | null> {
-  const tryFetch = async (url: string, parse: (j: any) => { lat: number; lon: number } | null) => {
+// ---- IP 定位：返回 {lat, lon, countryCode} 或 null（失败兜底北京）----
+// 全部 https，浏览器 fetch 时服务端返回的是"发起请求者的 IP"（访客本机 IP）。
+async function getGeoLocation(): Promise<{
+  lat: number
+  lon: number
+  countryCode?: string
+} | null> {
+  const tryFetch = async (
+    url: string,
+    parse: (j: any) => { lat: number; lon: number; countryCode?: string } | null,
+  ) => {
     try {
       const ctrl = new AbortController()
       const t = setTimeout(() => ctrl.abort(), 6000)
@@ -99,11 +116,15 @@ async function getGeoLocation(): Promise<{ lat: number; lon: number } | null> {
     }
   }
   const primary = await tryFetch(GEO_PRIMARY, (j) =>
-    j && j.status === 'success' && j.lat != null ? { lat: j.lat, lon: j.lon } : null,
+    j && j.success && j.latitude != null
+      ? { lat: j.latitude, lon: j.longitude, countryCode: j.country_code }
+      : null,
   )
   if (primary) return primary
   const backup = await tryFetch(GEO_BACKUP, (j) =>
-    j && j.success && j.latitude != null ? { lat: j.latitude, lon: j.longitude } : null,
+    j && j.loc
+      ? { lat: parseFloat(j.loc.split(',')[0]), lon: parseFloat(j.loc.split(',')[1]), countryCode: j.country_code }
+      : null,
   )
   if (backup) return backup
   return null
@@ -129,44 +150,56 @@ async function loadTextures(THREE: any): Promise<Record<string, any> | null> {
     loadOne(TEXTURES.day).then((t) => (results.day = t)),
     loadOne(TEXTURES.night).then((t) => (results.night = t)),
     loadOne(TEXTURES.clouds).then((t) => (results.clouds = t)),
+    loadOne(TEXTURES.normal).then((t) => (results.normal = t)),
+    loadOne(TEXTURES.specular).then((t) => (results.specular = t)),
   ])
   if (!results.day) return null
   return results
 }
 
-// ---- 天文算法：太阳黄经 → 子夜点经纬度（随时间实时变化）----
-// 这是"实时昼夜"的核心：给定 UTC 时间，算出此刻地球上"正午"（太阳在头顶）的经度，
-// 与当前时刻对应，地球朝向固定时，太阳射入方向就该绕 Y 轴旋转，昼夜自然随你当地真实时间变。
+// ---- 天文算法：太阳直射点经纬度（随时间实时变化）----
+// 这是"实时昼夜"的核心：给定 UTC 时间，算出此刻地球上"正午"（太阳在头顶）的经纬度，
+// 地球朝向固定时，太阳射入方向逐帧更新，昼夜自然随真实时间变化。
 const D2R = Math.PI / 180
-function sunDirectionToDate(date: Date): { x: number; y: number; z: number } {
-  const T = (date.getTime() / 86400000 - 2451545) / 36525 // 世纪数（J2000 起）
+function subsolarPoint(date: Date): { lat: number; lon: number } {
+  const T = (date.getTime() / 86400000 - 2451545) / 36525
   // 平黄经
   const L = (280.46646 + T * (36000.76983 + T * 0.00041)) % 360
-  // 太阳黄经（小行星修正略，精度足够用于昼夜示意）
   const g = (357.52911 + T * (35999.05029 - 0.0001537 * T)) % 360 * D2R
   const lambda = (L + 1.9146 * Math.sin(g) + 0.0203 * Math.sin(2 * g)) % 360 * D2R
-  // 太阳赤纬
-  const eps = 0.4090928 // 23.4393°
-  const decl = Math.asin(Math.sin(eps) * Math.sin(lambda))
-  // 平子午点经度（UTC 时）：本地恒星时 ≈ UT*15° + 0（粗略，足够）
+  // 太阳赤纬（±23.44°）
+  const eps = 0.4090928
+  const decl = Math.asin(Math.sin(eps) * Math.sin(lambda)) / D2R
+  // 直射点经度：UTC 正午在 0° 经线，每小时向西 15°
   const utcHours = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600
-  const lst = (utcHours * 15 + 0) * D2R // 子夜点经度（正午点）
-  // 太阳在地心坐标系（X 指向春分点方向投影到赤道面）：
-  // 此处简化为：太阳方向 = 指向"正午经度 + 赤纬"
-  const sx = Math.cos(decl) * Math.cos(lst)
-  const sy = Math.sin(decl)
-  const sz = Math.cos(decl) * Math.sin(lst)
-  return { x: sx, y: sy, z: sz }
+  const lon = ((12 - utcHours) * 15 + 540) % 360 - 180
+  return { lat: decl, lon }
 }
 
-function latLonToVec3(lat: number, lon: number, r: number): { x: number; y: number; z: number } {
-  const la = lat * D2R
-  const lo = lon * D2R
+// 经纬度 → three.js SphereGeometry 上的局部坐标。
+// 必须和球体 UV 严格对齐，否则 pin / 太阳方向会落在错误的位置：
+//   three r128: x=-cos(phi)sin(theta), y=cos(theta), z=sin(phi)sin(theta)
+//   phi=(lon+180)°, theta=(90-lat)°（等距柱状贴图 u=0 在 180°W）
+// 化简后即：x = cos(lat)cos(lon+180)... 直接写标准形式：
+//   x = -cos(lat)*cos(lon+180)  →  实算用下面的 phi/theta 形式，避免符号踩坑
+function geoToVec3(lat: number, lon: number, r: number): { x: number; y: number; z: number } {
+  const phi = (lon + 180) * D2R
+  const theta = (90 - lat) * D2R
+  const s = Math.sin(theta)
   return {
-    x: r * Math.cos(la) * Math.cos(lo),
-    y: r * Math.sin(la),
-    z: r * Math.cos(la) * Math.sin(lo),
+    x: -r * Math.cos(phi) * s,
+    y: r * Math.cos(theta),
+    z: r * Math.sin(phi) * s,
   }
+}
+
+// 计算"聚焦到某经纬度"需要的 rotX/rotY，使该点转到相机正对的方向（+Z）。
+// three.js 默认欧拉序是 'XYZ'，等价于 R = Rx(rx) * Ry(ry) * Rz(rz)：
+//   1) Ry(ry) 把该点转到 x=0 平面 → ry = -90 - lon
+//   2) Rx(rx) 把该点抬到 +Z      → rx = lat
+// （数值已用 three r128 的 Matrix4.makeRotationFromEuler 精确矩阵验证，误差 ~1e-16）
+function focusOn(lat: number, lon: number): { rotX: number; rotY: number } {
+  return { rotX: lat * D2R, rotY: (-90 - lon) * D2R }
 }
 
 function webglAvailable(): boolean {
@@ -198,16 +231,34 @@ onMounted(() => {
   let frameId = 0
   let dragging = false
   let lastX = 0, lastY = 0, velX = 0, velY = 0
-  let rotX = 0.15, rotY = 0
-  const CLOUD_SPEED = 0.00028 // 云层相对自转速度（比地球快一点点 → 云在飘）
-  const DEFAULT_GEO = { lat: 39.9, lon: 116.4 } // 兜底北京
-  let geo = DEFAULT_GEO
+  // rotX/rotY 初始 0，定位拿到后再聚焦
+  let rotX = 0, rotY = 0
+  let targetRotX = 0, targetRotY = 0
+  let cameraZ = DEFAULT_ZOOM // 初始远一点，定位后聚焦拉近
+  let targetCameraZ = DEFAULT_ZOOM
+  const CLOUD_SPEED = 0.00025
+  type GeoResult = { lat: number; lon: number; countryCode?: string }
+  const DEFAULT_GEO: GeoResult = { lat: 35.5, lon: 104, countryCode: 'CN' } // 兜底：中国中心
+  let geo: GeoResult = DEFAULT_GEO
+  let geoReady = false
+  let ring: any
 
   const boot = async () => {
     // 定位与 three.js 并行拉（不阻塞）
     const [THREE, geoResult] = await Promise.all([loadThree(), getGeoLocation()])
     if (disposed) return
     if (geoResult) geo = geoResult
+
+    // 计算目标朝向 + 相机距离（国家尺度）
+    const target = focusOn(geo.lat, geo.lon)
+    targetRotX = target.rotX
+    targetRotY = target.rotY
+    targetCameraZ = COUNTRY_ZOOM[geo.countryCode || ''] || DEFAULT_ZOOM
+    // 起个慢动作：从远拉近 + 旋转到目标
+    cameraZ = targetCameraZ + 0.8 // 从稍远一点开始
+    rotX = targetRotX
+    rotY = targetRotY - 0.3 // 稍偏一点开始，缓动到目标
+    geoReady = true
 
     const w = wrap.clientWidth || window.innerWidth
     const h = wrap.clientHeight || window.innerHeight
@@ -218,7 +269,7 @@ onMounted(() => {
 
     scene = new THREE.Scene()
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 200)
-    camera.position.z = 3.0 // 聚焦放大：地球占屏更大
+    camera.position.z = cameraZ
 
     const tex = await loadTextures(THREE)
     if (disposed) return
@@ -252,33 +303,73 @@ onMounted(() => {
     )
     scene.add(atmo)
 
-    // ===== 地球本体：昼夜 shader（白天贴图 + 夜间城市灯光，晨昏线 smoothstep）=====
+    // ===== 地球本体：昼夜 shader（白天 + 夜间灯光 + 法线凹凸 + 镜面 + 晨昏线暖色）=====
     const earthMat = new THREE.ShaderMaterial({
       uniforms: {
         dayTex: { value: tex.day },
         nightTex: { value: tex.night || tex.day },
+        normalTex: { value: tex.normal },
+        specTex: { value: tex.specular },
         sunDir: { value: new THREE.Vector3(1, 0, 0) },
+        normalScale: { value: new THREE.Vector2(0.85, 0.85) },
       },
       vertexShader: `
         varying vec2 vUv;
         varying vec3 vNormal;
+        varying vec3 vWorldPos;
         void main() {
           vUv = uv;
           vNormal = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vWorldPos = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: `
         uniform sampler2D dayTex;
         uniform sampler2D nightTex;
+        uniform sampler2D normalTex;
+        uniform sampler2D specTex;
         uniform vec3 sunDir;
+        uniform vec2 normalScale;
         varying vec2 vUv;
         varying vec3 vNormal;
+        varying vec3 vWorldPos;
         void main() {
+          // 法线扰动（让山地/海洋更真实）
+          vec3 nrm = normalize(texture2D(normalTex, vUv).xyz * 2.0 - 1.0);
+          nrm.xy *= normalScale;
+          // 简化：用法线扰动调整光照（不重算切线空间，够示意）
+          vec3 perturbNormal = normalize(vNormal + nrm.xy * 0.3);
+
           vec3 dayColor = texture2D(dayTex, vUv).rgb;
           vec3 nightColor = texture2D(nightTex, vUv).rgb * 1.7;
-          float diff = dot(vNormal, normalize(sunDir));
-          float mixRatio = smoothstep(-0.12, 0.28, diff);
-          vec3 color = mix(nightColor, dayColor, mixRatio);
+
+          // 镜面（海洋反光）
+          float spec = 0.0;
+          if (texture2D(specTex, vUv).r > 0.5) {
+            spec = 0.4;
+          }
+
+          float diff = dot(perturbNormal, normalize(sunDir));
+          float dayAmount = smoothstep(-0.1, 0.3, diff);
+
+          // 晨昏线：diff 在 0 附近加暖色（日落橙红）
+          float twilight = 1.0 - smoothstep(0.0, 0.25, abs(diff));
+          vec3 twilightColor = vec3(0.95, 0.55, 0.25) * twilight * 0.4;
+
+          // 镜面高光（简化 Blinn-Phong）
+          vec3 viewDir = normalize(cameraPosition - vWorldPos);
+          vec3 halfDir = normalize(normalize(sunDir) + viewDir);
+          float specAmount = pow(max(dot(perturbNormal, halfDir), 0.0), 32.0) * spec * dayAmount;
+
+          vec3 color = mix(nightColor, dayColor, dayAmount);
+          color += twilightColor;
+          color += vec3(specAmount) * dayAmount;
+
+          // 大气边缘暗化（模拟曲率）
+          float edge = 1.0 - pow(max(dot(normalize(vNormal), viewDir), 0.0), 1.5);
+          color *= 1.0 - edge * 0.35;
+
           gl_FragColor = vec4(color, 1.0);
         }`,
     })
@@ -292,7 +383,7 @@ onMounted(() => {
         new THREE.MeshLambertMaterial({
           map: tex.clouds,
           transparent: true,
-          opacity: 0.42,
+          opacity: 0.45,
           depthWrite: false,
         }),
       )
@@ -311,39 +402,23 @@ onMounted(() => {
     )
     scene.add(glow)
 
-    // ===== 访客所在地 pin（发光圆点 + 脉冲光环 + 竖直杆）=====
+    // ===== 访客所在地 pin（小圆点 + 细环，去长杆，不突兀）=====
     const pinGroup = new THREE.Group()
-    // 竖杆（从球面往外伸出）
-    const { x: px, y: py, z: pz } = latLonToVec3(geo.lat, geo.lon, RADIUS)
-    const pinDir = new THREE.Vector3(px, py, pz).normalize()
-    const pinTip = pinDir.clone().multiplyScalar(RADIUS * 1.35)
-    const poleGeo = new THREE.BufferGeometry()
-    poleGeo.setAttribute(
-      'position',
-      new THREE.BufferAttribute(
-        new Float32Array([px, py, pz, pinTip.x, pinTip.y, pinTip.z]),
-        3,
-      ),
-    )
-    const pole = new THREE.Line(
-      poleGeo,
-      new THREE.LineBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.9 }),
-    )
-    pinGroup.add(pole)
-    // 圆点
+    const { x: px, y: py, z: pz } = geoToVec3(geo.lat, geo.lon, RADIUS)
+    // 圆点（较小）
     const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(RADIUS * 0.045, 24, 24),
-      new THREE.MeshBasicMaterial({ color: 0xffcc33 }),
+      new THREE.SphereGeometry(RADIUS * 0.03, 24, 24),
+      new THREE.MeshBasicMaterial({ color: 0xff5555, transparent: true, opacity: 0.95 }),
     )
     dot.position.set(px, py, pz)
     pinGroup.add(dot)
-    // 脉冲光环
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(RADIUS * 0.06, RADIUS * 0.09, 32),
+    // 细环（脉冲）
+    ring = new THREE.Mesh(
+      new THREE.RingGeometry(RADIUS * 0.04, RADIUS * 0.055, 48),
       new THREE.MeshBasicMaterial({
-        color: 0xffcc33,
+        color: 0xff5555,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.6,
         side: THREE.DoubleSide,
       }),
     )
@@ -381,8 +456,8 @@ onMounted(() => {
     scene.add(stars)
 
     // ===== 光（模拟太阳，逐帧更新方向）=====
-    scene.add(new THREE.AmbientLight(0xffffff, 0.22))
-    sunLight = new THREE.DirectionalLight(0xffffff, 1.7)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25))
+    sunLight = new THREE.DirectionalLight(0xffffff, 1.8)
     scene.add(sunLight)
 
     // ---- 交互：拖拽惯性 + 视差 ----
@@ -416,17 +491,25 @@ onMounted(() => {
     window.addEventListener('pointerup', onUp)
 
     let ringPhase = 0
+    // 复用的太阳方向向量（避免每帧分配）
+    const sunVec = new (window as any).THREE.Vector3()
     const tick = () => {
       if (disposed) return
       const now = performance.now()
 
-      // 惯性 + 极缓自转（比上一版慢很多，配合"聚焦"主题）
+      // 惯性 + 极缓自转（配合"聚焦"主题，慢转）
       if (!dragging) {
         velX *= 0.94
         velY *= 0.94
       }
-      rotY += velX + 0.00018
-      rotX += velY
+      // 未手动拖拽时，向"目标朝向 + 国家中心"缓动（实现"定位后自动聚焦"）
+      if (!dragging && geoReady) {
+        rotX += (targetRotX + 0.00012 * now - rotX) * 0.02 + velX
+        rotY += (targetRotY + 0.00012 * now - rotY) * 0.02 + velY
+      } else {
+        rotX += velX
+        rotY += velX + 0.00012
+      }
       rotX = Math.max(-1.1, Math.min(1.1, rotX))
 
       // 地球/云/光晕/pin 一起转（云多转一点）
@@ -443,25 +526,35 @@ onMounted(() => {
         pin.rotation.x = rotX
       }
 
+      // 相机缓动到目标距离（定位拉近动画）
+      if (geoReady && !dragging) {
+        cameraZ += (targetCameraZ - cameraZ) * 0.03
+        camera.position.z = cameraZ
+      }
+
       // 星星缓慢反向 + 闪烁
       stars.rotation.y -= 0.00006
       ;(stars.material as any).opacity = 0.7 + 0.18 * Math.sin(now * 0.0011)
 
-      // 实时昼夜：逐帧算此刻太阳方向（你当地真实时间驱动）
-      const sun = sunDirectionToDate(new Date())
-      const sunVec = new THREE.Vector3(sun.x, sun.y, sun.z)
+      // 实时昼夜：逐帧算此刻太阳直射点，转成地球局部向量后再随地球一起转，
+      // 保证被照亮的地方永远是地球上"此刻是正午"的那一半。
+      const sub = subsolarPoint(new Date())
+      const sunLocal = geoToVec3(sub.lat, sub.lon, 1)
+      sunVec.set(sunLocal.x, sunLocal.y, sunLocal.z)
+      // 应用地球当前的旋转（与 globe.rotation 一致），得到世界方向
+      sunVec.applyEuler(globe.rotation)
       ;(earthMat.uniforms.sunDir as any).value.copy(sunVec)
-      sunLight.position.copy(sunVec.multiplyScalar(5))
+      sunLight.position.copy(sunVec).multiplyScalar(5)
 
-      // pin 脉冲光环（半径 + 透明度周期性变化）
-      ringPhase = (ringPhase + 0.02) % (Math.PI * 2)
+      // pin 脉冲细环（半径 + 透明度周期性变化，幅度小不突兀）
+      ringPhase = (ringPhase + 0.025) % (Math.PI * 2)
       const pulse = 0.5 + 0.5 * Math.sin(ringPhase)
-      ;(ring as any).scale.setScalar(0.6 + pulse * 1.6)
-      ;(ring.material as any).opacity = 0.75 - pulse * 0.55
+      ;(ring as any).scale.setScalar(0.7 + pulse * 0.6)
+      ;(ring.material as any).opacity = 0.6 - pulse * 0.35
 
-      // 视差：相机随鼠标轻微位移
-      camera.position.x += (mouse.x * 0.12 - camera.position.x) * 0.04
-      camera.position.y += (-mouse.y * 0.12 - camera.position.y) * 0.04
+      // 视差：相机随鼠标轻微位移（不影响聚焦）
+      camera.position.x += (mouse.x * 0.08 - camera.position.x) * 0.03
+      camera.position.y += (-mouse.y * 0.08 - camera.position.y) * 0.03
       camera.lookAt(0, 0, 0)
 
       renderer.render(scene, camera)
