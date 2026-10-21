@@ -552,16 +552,42 @@ function focusOn(lat: number, lon: number): { rotX: number; rotY: number } {
   return { rotX: lat * D2R, rotY: (-90 - lon) * D2R }
 }
 
-function webglAvailable(): boolean {
-  try {
-    const c = document.createElement('canvas')
-    return !!(
-      window.WebGLRenderingContext &&
-      (c.getContext('webgl') || c.getContext('experimental-webgl'))
-    )
-  } catch {
-    return false
+// WebGL 可用性检测。
+//
+// 【曾经的 bug 1】只试 'webgl' / 'experimental-webgl'，而 three.js r128 的
+//   创建优先级是 ["webgl2", "webgl", "experimental-webgl"]（优先 WebGL2）。
+//   在「只暴露 WebGL2」的驱动上会误判为不支持。
+//
+// 【曾经的 bug 2】探测用的 canvas 拿到上下文后没有释放，白白占掉一个配额。
+//   浏览器对同时存活的 WebGL 上下文有硬上限（通常 16 个），
+//   探测本身也在吃配额，长期运行/热更新后会把配额耗光。
+//
+// 返回：'ok' | 'no-api' | 'exhausted'
+//   exhausted = API 存在但创建不出上下文，通常是配额耗尽或 GPU 进程崩溃，
+//   这种情况重开标签页有较大概率恢复，需要给用户不同的提示。
+function webglProbe(): 'ok' | 'no-api' | 'exhausted' {
+  const has1 = !!window.WebGLRenderingContext
+  const has2 = !!(window as any).WebGL2RenderingContext
+  if (!has1 && !has2) return 'no-api'
+
+  for (const kind of ['webgl2', 'webgl', 'experimental-webgl']) {
+    try {
+      const c = document.createElement('canvas')
+      const ctx = c.getContext(kind as any)
+      if (ctx) {
+        // 探测完立刻归还配额，避免自己成为泄漏源
+        try {
+          ;(ctx as any).getExtension?.('WEBGL_lose_context')?.loseContext?.()
+        } catch {
+          /* 释放失败不影响结论 */
+        }
+        return 'ok'
+      }
+    } catch {
+      /* 换下一个类型 */
+    }
   }
+  return 'exhausted'
 }
 
 onMounted(() => {
@@ -569,11 +595,18 @@ onMounted(() => {
   const wrap = wrapRef.value
   if (!canvas || !wrap) return
 
-  // 降级 1：设备无 WebGL → 直接 CSS 兜底
-  if (!webglAvailable()) {
+  // 降级 1：设备无 WebGL → 直接 CSS 兜底。
+  // 区分「确实不支持」和「配额耗尽/GPU 进程崩溃」——后者重开标签页即可恢复，
+  // 给用户的提示必须不一样，否则会让人以为自己的电脑出了问题。
+  const probe = webglProbe()
+  if (probe !== 'ok') {
     fallbackReason.value = 'no-webgl'
     fallbackDetail.value =
-      '当前浏览器未启用 WebGL（常见于关闭了硬件加速、或显卡驱动被禁用）'
+      probe === 'no-api'
+        ? '浏览器不支持 WebGL（版本过旧，或被策略完全禁用）'
+        : 'WebGL 上下文暂时无法创建（通常是当前标签页的 WebGL 配额已耗尽，' +
+          '或 GPU 进程崩溃过）。请关闭本标签页后重新打开；若仍不行，' +
+          '重启浏览器即可恢复——浏览器设置里的硬件加速开关不用改'
     return
   }
 
@@ -1226,7 +1259,18 @@ onMounted(() => {
       wrap.removeEventListener('pointerdown', onDown)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      renderer?.dispose()
+      // 关键：renderer.dispose() 只释放 GPU 资源，**不会释放 WebGL 上下文**。
+      // 浏览器对同时存活的上下文有硬上限（通常 16 个），一旦泄漏累积到上限，
+      // 后续所有 getContext 都返回 null —— 表现就是「WebGL 突然不可用」，
+      // 且刷新页面也不一定恢复（同一个标签页内配额是共享的）。
+      // forceContextLoss() 才是真正让上下文失效并归还配额的方法。
+      try {
+        renderer?.forceContextLoss?.()
+      } catch {
+        /* 上下文可能已丢失，忽略 */
+      }
+      renderer?.dispose?.()
+      renderer = null
     }
   }
 
