@@ -28,7 +28,9 @@
           <hp-input v-model="state.addMarkInfo.markUrl" />
         </hp-form-item>
         <hp-form-item label-width="70" label="" :error="''">
-          <hp-button type="primary" @click="handleGetIconByURL">根据URL获取标签图标</hp-button>
+          <hp-button type="primary" :loading="iconLoading" @click="handleGetIconByURL">
+            {{ iconLoading ? '获取中…' : '根据URL获取标签图标' }}
+          </hp-button>
         </hp-form-item>
         <hp-form-item label-width="70" label="标签图标" :error="''">
           <hp-upload v-if="state.addMarkInfo.markIcon == ''" @change="fileChange"></hp-upload>
@@ -46,7 +48,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { uploadMarkIcon, getMarkIconByURL, updateSort, addMark, getMarkGroupWithoutLogin, getMarkGroup } from "../../../api/mark/mark"
 import MarkItem from "../cardType/MarkItem.vue";
 import { MarkInfo, MarkGroupInfo } from "../../../models/mark"
@@ -128,15 +130,41 @@ watch(() => store.token, (val) => {
   }
 }, { immediate: true })
 
-const handleGetIconByURL = () => {
-  if (state.addMarkInfo.markUrl != '') {
-    getMarkIconByURL(state.addMarkInfo.markUrl).then(res => {
-      if (res.code === 200) {
-        state.addMarkInfo.markIcon = res.data
-      }
-    })
+// 根据 URL 抓取标签图标。
+// 注意三个易被忽略的体验点：
+//  1) 抓取要 1~8 秒，必须有 loading 态且防重复点击（按钮禁用它自然就防住了）
+//  2) 任何一路失败都要给明确提示，否则用户以为"没点到"
+//  3) 服务端拿不到图标时返回 null，此时保留原来的图标不要清空
+const iconLoading = ref(false)
+
+const getIconFromUrl = async () => {
+  if (iconLoading.value) return
+
+  const rawUrl = (state.addMarkInfo.markUrl || '').trim()
+  if (!rawUrl) {
+    toast.error('请先填写标签 URL')
+    return
+  }
+
+  iconLoading.value = true
+  try {
+    const res = await getMarkIconByURL(rawUrl)
+    if (res?.code === 200 && res.data) {
+      state.addMarkInfo.markIcon = res.data
+      toast.success('已获取图标')
+    } else {
+      // 没有图标很正常（站点没声明、被墙、防盗链），提示用户可手动上传
+      toast.error('没能获取到该站点的图标，可以手动上传一张')
+    }
+  } catch (e) {
+    toast.error('获取图标失败，请稍后重试或手动上传')
+  } finally {
+    iconLoading.value = false
   }
 }
+
+// 保留原函数名，避免模板里的 @click 失效
+const handleGetIconByURL = getIconFromUrl
 
 const handleChangeEditStatus = () => {
   store.isCardEditStatus = true;

@@ -1,5 +1,11 @@
 <template>
-  <button class="hp-button" :class="[btnClass]" @click="handleClick">
+  <button
+    class="hp-button"
+    :class="[btnClass, { 'hp-button--loading': loading, 'hp-button--disabled': disabled }]"
+    :disabled="disabled || loading"
+    @click="handleClick"
+  >
+    <span v-if="loading" class="hp-button__spinner" aria-hidden="true"></span>
     <span v-if="$slots.default">
       <slot />
     </span>
@@ -16,6 +22,16 @@ const props = defineProps({
     type: String,
     default: 'default',
     validator: (val: string) => ['default', 'primary', 'success', 'warning', 'danger'].includes(val)
+  },
+  // 禁用：用于防止重复提交
+  disabled: {
+    type: Boolean,
+    default: false
+  },
+  // 加载中：显示转圈并自动禁用点击（异步操作如抓图标、保存时使用）
+  loading: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -26,6 +42,8 @@ const btnClass = computed(() => {
 
 // 处理按钮点击事件
 const handleClick = (event: Event) => {
+  // 禁用/加载中不派发点击，避免重复请求
+  if (props.disabled || props.loading) return;
   // 触发 click 事件，将事件参数传递给父组件
   emits('click', event);
 }
@@ -36,6 +54,7 @@ const handleClick = (event: Event) => {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 8px 15px;
   font-size: 14px;
   border: 1px solid;
@@ -44,6 +63,27 @@ const handleClick = (event: Event) => {
   vertical-align: middle;
   outline: none;
   transition: all .1s ease;
+
+  // 禁用态：降透明度 + 禁用指针，避免用户以为"没反应"
+  &--disabled,
+  &:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+  }
+}
+
+// 加载转圈：纯 CSS，不引入图标库
+.hp-button__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: hp-button-spin .7s linear infinite;
+}
+
+@keyframes hp-button-spin {
+  to { transform: rotate(360deg); }
 }
 
 .hp-button--default {
