@@ -11,6 +11,18 @@ export const useStore = defineStore('index', {
       cacheMarkListData: [] as Array<MarkList>,
       token: localStorage.getItem("token") || "",
       isCardEditStatus: false as boolean,
+      /**
+       * 右键菜单发起的「添加标签」意图。
+       * 右键菜单与添加弹窗分属不同组件，用 store 传递避免 props 层层透传：
+       *  - 空白处右键「增加标签组」      -> { mode: 'new-group' }
+       *  - 标签组上右键「往[XX]添加标签」 -> { mode: 'existing-group', groupId, groupName }
+       * NavBar 监听它来打开弹窗并预填标签组，处理完调 clearAddTagIntent()。
+       */
+      addTagIntent: null as null | {
+        mode: 'new-group' | 'existing-group'
+        groupId?: string
+        groupName?: string
+      },
     }
   },
   actions: {
@@ -36,6 +48,20 @@ export const useStore = defineStore('index', {
     // 由拖拽视图写入：每次拖拽结束后把当前显示顺序同步进来
     setCacheMarkListData(list: Array<MarkList>) {
       this.cacheMarkListData = list
+    },
+
+    /** 右键菜单请求「添加标签」 */
+    requestAddTag(intent: {
+      mode: 'new-group' | 'existing-group'
+      groupId?: string
+      groupName?: string
+    }) {
+      this.addTagIntent = intent
+    },
+
+    /** 弹窗消费完意图后清空，避免重复触发 */
+    clearAddTagIntent() {
+      this.addTagIntent = null
     },
 
     // 把当前显示顺序交给 NavBar 用于持久化：

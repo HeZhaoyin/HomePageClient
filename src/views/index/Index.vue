@@ -1,11 +1,14 @@
 <template>
-  <div>
+  <div class="index-root">
     <VueDraggable ref="el" :disabled="!store.isCardEditStatus" :animation="150" v-model="state.cacheMarkListData"
       @start="onStart" @update="onUpdate" @end="onEnd" @move="onMove" ghostClass="ghost" filter=".user-box" class="main-content-box" handle=".drag-area">
       <Card :class="[{'no-drag': card.id === 'avatar'}]" v-for="card in state.cacheMarkListData" :type="card.type" :card-data="card" :key="card.id"
         @show-or-hide-login="showOrHideLogin" :is-login-status="state.isLoginStatus"
-        :login-animation-reverse="state.loginAnimationReverse" :is-login-input-show="state.isLoginInputShow"/>
+        :login-animation-reverse="state.loginAnimationReverse" :is-login-input-show="state.isLoginInputShow"
+        :data-group-id="card.type === 'MarkGroup' ? card.id : ''"
+        :data-group-name="card.type === 'MarkGroup' ? (card.markGroupName || '') : ''"/>
     </VueDraggable>
+
   </div>
 </template>
 
@@ -27,6 +30,7 @@ const state = reactive({
   isLoginInputShow: false,
   cacheMarkListData: [] as MarkList[],
 })
+
 
 watch(() => store.token, () => {
   store.initMarkListData();
