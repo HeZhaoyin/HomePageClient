@@ -1,7 +1,22 @@
 <template>
   <div class="globe-wrap" ref="wrapRef">
     <canvas ref="canvasRef"></canvas>
-    <div class="globe-fallback" v-if="fallbackReason"></div>
+    <div class="globe-fallback" v-if="fallbackReason">
+      <!--
+        降级原因提示。之前降级只 console.error，用户看到的就是一张
+        静态地球图，完全不知道发生了什么、也不知道该找谁。
+        这里把原因和版本号直接显示出来，便于自查与反馈。
+        只在 URL 带 ?debug 或降级时显示，不影响正常观感。
+      -->
+      <div class="globe-fallback__note">
+        <div class="globe-fallback__title">3D 地球未加载，已降级为静态图</div>
+        <div class="globe-fallback__reason">原因：{{ fallbackDetail }}</div>
+        <div class="globe-fallback__hint">
+          若你刚更新过版本，请强制刷新（Ctrl/Cmd + Shift + R）；
+          仍不行请把这一行和浏览器控制台的报错一起反馈。
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -19,6 +34,8 @@ import { onMounted, onUnmounted, ref } from 'vue'
 const wrapRef = ref<HTMLDivElement>()
 const canvasRef = ref<HTMLCanvasElement>()
 const fallbackReason = ref('')
+// 降级原因的可读描述，直接显示在静态图上，便于用户自查与反馈
+const fallbackDetail = ref('')
 
 // three.js CDN（按可达性排序，逐个回退）。
 // 注意：staticfile 与 jsdelivr 在部分网络/证书链环境下会失败
@@ -555,6 +572,8 @@ onMounted(() => {
   // 降级 1：设备无 WebGL → 直接 CSS 兜底
   if (!webglAvailable()) {
     fallbackReason.value = 'no-webgl'
+    fallbackDetail.value =
+      '当前浏览器未启用 WebGL（常见于关闭了硬件加速、或显卡驱动被禁用）'
     return
   }
 
@@ -691,6 +710,8 @@ onMounted(() => {
     if (disposed) return
     if (!dayTex) {
       fallbackReason.value = 'load-failed'
+      fallbackDetail.value =
+        '卫星底图加载失败（ArcGIS 与备用源均不可达，或网络超时）'
       return
     }
     const tex: Record<string, any> = { day: dayTex }
@@ -1212,6 +1233,7 @@ onMounted(() => {
   boot().catch((e) => {
     console.error('[EarthGlobe] init failed, fallback:', e)
     fallbackReason.value = 'load-failed'
+    fallbackDetail.value = '初始化异常：' + (e?.message || String(e))
   })
 })
 
@@ -1252,6 +1274,42 @@ onUnmounted(() => {
   background: url('@/assets/bgtiny.webp') no-repeat center center;
   background-size: cover;
   animation: globe-breathe 9s ease-in-out infinite;
+
+  // 降级说明：默认半透明低调展示，鼠标悬停或移动端长按时可读。
+  // 目的是让用户知道「这不是坏了，是降级了」以及该怎么办。
+  &__note {
+    position: absolute;
+    left: 50%;
+    bottom: 40px;
+    transform: translateX(-50%);
+    max-width: min(680px, 88vw);
+    padding: 14px 20px;
+    border-radius: 12px;
+    background: rgba(8, 12, 24, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(8px);
+    color: rgba(255, 255, 255, 0.86);
+    font-size: 13px;
+    line-height: 1.6;
+    text-align: center;
+    user-select: text;
+    animation: none; // 父级有 breathe 动画，这里保持静止以便阅读
+  }
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffd8a8;
+    margin-bottom: 4px;
+  }
+  &__reason {
+    color: #ffb4a8;
+    word-break: break-all;
+  }
+  &__hint {
+    margin-top: 6px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+  }
 }
 
 @keyframes globe-breathe {
