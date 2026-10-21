@@ -77,6 +77,51 @@ const handleShowAddBtnClick = () => {
   state.isShowAddDialog = true
 }
 
+// 响应右键菜单发起的「添加标签」意图：
+//  - new-group       -> 打开弹窗，标签组默认「新建标签组」
+//  - existing-group  -> 打开弹窗并预选该标签组（不再显示"标签组名"输入框）
+// 消费后立即清空 intent，避免弹窗反复被触发。
+//
+// 注意时序：标签组下拉是异步加载的，intent 可能在列表到位前到达。
+// 这种情况下 modelValue 先设上、currentLabel 暂时为空，等 options 到了会自动显示，
+// 但 HpSelect 的 watch 只在 modelValue 变化时触发，不会误清空，所以是安全的。
+// 这里额外记一份 pendingGroupId，供 options 到位后兜底校正。
+const pendingGroupId = ref('')
+
+watch(
+  () => store.addTagIntent,
+  (intent) => {
+    if (!intent) return
+    // 重置上一次的输入残留，避免串数据
+    state.addMarkInfo = {
+      markName: '',
+      markUrl: '',
+      markIcon: '',
+      markGroupId: intent.mode === 'existing-group' && intent.groupId ? String(intent.groupId) : '0',
+    }
+    state.addMarkGroupName = ''
+    pendingGroupId.value =
+      intent.mode === 'existing-group' && intent.groupId ? String(intent.groupId) : ''
+    state.isShowAddDialog = true
+    store.clearAddTagIntent()
+  },
+)
+
+// 下拉选项就绪后，若还有 pending 的组，确认它能被选中（已在列表中则无需处理）
+watch(
+  () => state.markGroupArr.length,
+  () => {
+    if (!pendingGroupId.value) return
+    const exists = state.markGroupArr.some(
+      (g: any) => String(g.value) === String(pendingGroupId.value),
+    )
+    if (exists) {
+      state.addMarkInfo.markGroupId = pendingGroupId.value
+      pendingGroupId.value = ''
+    }
+  },
+)
+
 const fileChange = (file: any) => {
   console.log(file)
   const formData = new FormData()
@@ -114,14 +159,15 @@ const handleSubmitAddMark = () => {
 watch(() => store.token, (val) => {
   if (val) {
     getMarkGroup().then(res => {
-      console.log(res)
+      // 用赋值而非 push：token 变化时该 watcher 会再跑一次，
+      // push 会让下拉选项出现重复项
+      state.markGroupArr = []
       res.data.forEach((item: MarkGroupInfo) => {
         state.markGroupArr.push({ label: item.markGroupName, value: item.id?.toString() })
       });
     })
   } else {
     getMarkGroupWithoutLogin().then(res => {
-      console.log(res)
       state.markGroupArr = []
       res.data.forEach((item: MarkGroupInfo) => {
         state.markGroupArr.push({ label: item.markGroupName, value: item.id?.toString() })
