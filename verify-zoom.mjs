@@ -57,9 +57,9 @@ function cameraDistanceForLonSpan(lonSpanDeg, fovV, aspect) {
 
 console.log('=== 1. target span of 10 deg gives a "province" view ===')
 for (const [name, aspect] of [['2:1 (user 2557x1265)', 2.02], ['16:9', 1.78], ['16:10', 1.6], ['4:3', 1.33]]) {
-  const d = cameraDistanceForLonSpan(10, FOV_V * D2R, aspect)
+  const d = cameraDistanceForLonSpan(14, FOV_V * D2R, aspect)
   const span = visibleLonSpan(d, aspect)
-  check(`${name}: visible span ~= 10 deg`, Math.abs(span - 10) < 0.01,
+  check(`${name}: visible span ~= 14 deg`, Math.abs(span - 14) < 0.01,
     `d=${d.toFixed(4)}, span=${span.toFixed(3)} deg`)
 }
 
@@ -85,14 +85,14 @@ console.log('\n=== 4. region texture resolution is sufficient ===')
 // screen shows 10 deg across 2557 px => 255.7 px/deg needed for 1:1.
 // So the region is under-sampled by 255.7/153.6 = 1.66x. That is a real
 // limitation; report it rather than hide it.
-const REGION_LON_SPAN = 10
-const REGION_WIDTH = 1536
+const REGION_LON_SPAN = 14
+const REGION_WIDTH = 2560
 const screenW = 2557
 const texPxPerDeg = REGION_WIDTH / REGION_LON_SPAN
-const screenPxPerDeg = screenW / 10
+const screenPxPerDeg = screenW / 14
 const oversample = screenPxPerDeg / texPxPerDeg
 console.log(`  region: ${texPxPerDeg.toFixed(0)} px/deg, screen needs ${screenPxPerDeg.toFixed(0)} px/deg`)
-check('region is within 2x of 1:1 (acceptable softness)', oversample <= 2,
+check('region is 1:1 with screen pixels (no under-sampling)', oversample <= 1.05,
   `${oversample.toFixed(2)}x under-sampled`)
 
 console.log('\n=== 5. night region resolution ===')
@@ -102,6 +102,32 @@ const nightPxPerDeg = 6 * 512 / 13.5 // 6 tiles across 13.5 deg at L6
 console.log(`  night region: ${nightPxPerDeg.toFixed(0)} px/deg -> ${(screenPxPerDeg / nightPxPerDeg).toFixed(2)}x under-sampled`)
 check('night region within 3x of 1:1', screenPxPerDeg / nightPxPerDeg <= 3,
   `${(screenPxPerDeg / nightPxPerDeg).toFixed(2)}x`)
+
+
+// ===== 6. 高纬度：区域覆盖必须能盖住屏幕可见经度 =====
+// 经线在高纬收敛，同样的相机距离下屏幕横向能看到的经度更多。
+// 若区域跨度固定 14 度，60°N 只能覆盖约一半 —— 表现为「只有中间清晰」。
+{
+  const REGION_LON_SPAN = 14
+  function regionSpanFor(lat) {
+    const f = Math.min(2.9, 1 / Math.max(0.35, Math.cos((lat * Math.PI) / 180)))
+    return REGION_LON_SPAN * f
+  }
+  function visibleSpanFor(lat) {
+    // 近似：可见经度 = 赤道可见跨度 / cos(lat)
+    return 14 / Math.cos((lat * Math.PI) / 180)
+  }
+  console.log('\n=== 6. high-latitude region coverage ===')
+  for (const lat of [0, 22.54, 45, 60, 70]) {
+    const cover = regionSpanFor(lat)
+    const need = visibleSpanFor(lat)
+    const ratio = cover / need
+    // factor 上限 1.8 之后高纬无法 100% 覆盖，目标是不低于 70%
+    const ok = ratio >= 0.7
+    if (!ok) fail++
+    console.log(`  ${ok ? 'OK  ' : 'FAIL'} lat=${lat}: region=${cover.toFixed(1)} deg, visible~${need.toFixed(1)} deg, coverage=${(ratio * 100).toFixed(0)}%`)
+  }
+}
 
 console.log(`\n${fail === 0 ? '>>> ALL CHECKS PASSED' : '>>> ' + fail + ' CHECK(S) FAILED'}`)
 process.exit(fail === 0 ? 0 : 1)

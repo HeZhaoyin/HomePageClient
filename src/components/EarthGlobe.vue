@@ -57,13 +57,19 @@ const TEXTURES = {
   specular: TEX('earth_specular_2048.jpg'),
 }
 
-// 高清区域的经纬度跨度。10x8 度约覆盖一个省份（广东 7.5x5.3 度），
-// 配合 d≈1.1 的相机距离，屏幕上看到的主要就是该省。
-// 与相机距离无关，只由跨度决定 —— 跨度越小越"局部"。
-const REGION_LON_SPAN = 10
-const REGION_LAT_SPAN = 8
-const REGION_WIDTH = 1536
-const REGION_HEIGHT = 1280
+// 高清区域的经纬度跨度。
+// 【关键】必须 ≥ 屏幕实际可见范围，否则区域外的低清图会露在画面里 ——
+// 之前 10x8 度，而 2:1 宽屏在 d=1.10 时横向能看 14 度，
+// 结果就是「只有中间一块清晰，左右两侧全是糊的」。
+// 现在取 14x10 度（略大于可见范围），高纬度会按 1/cos(lat) 自动放宽。
+const REGION_LON_SPAN = 14
+const REGION_LAT_SPAN = 10
+// 分辨率按「1 屏幕像素 = 1 纹理像素」标定：
+//   屏幕 2557px 宽 / 14 度 = 183 px/度
+//   2560px / 14 度          = 183 px/度  -> 1.00x，无欠采样
+// （之前 1536px/10度 = 154 px/度，屏幕需 256 px/度，欠采样 1.66x，所以糊）
+// 高度由宽度按跨度比例算出，无需单独常量。
+const REGION_WIDTH = 2560
 
 // 夜间灯光高清区：NASA GIBS VIIRS Black Marble，epsg4326 瓦片拼接。
 // 真数据约 15 弧秒，但 GIBS 服务端最高只到 L7（228 px/度）。
@@ -82,9 +88,15 @@ const PIN_CANVAS_H = 384
 // 针底在画布上的 y 坐标（与绘制代码保持一致）
 const PIN_NEEDLE_BASE_Y = PIN_CANVAS_H - 8
 
-// 屏幕上想看到的经度跨度（度）。10 度约一个省（广东 7.5 度宽），
-// 配合 10x8 度的高清区域图，画面上主要就是访客所在的省。
-const TARGET_LON_SPAN = 10
+// 屏幕上想看到的经度跨度（度）。14 度略小于广东+周边（广东 7.5 度），
+// 既能看清一个省，又不会放大到失去地理上下文。
+// 必须与 REGION_LON_SPAN 匹配或略小，否则区域外会露出低清图。
+const TARGET_LON_SPAN = 14
+
+// 屏幕尺寸的换算：d≈1.14 时 1 世界单位 ≈ 1340 CSS px（2:1 屏）。
+// 取 0.018 -> 单边约 24px，轻微跟随、不抢注意力。
+// （曾是 0.08 = 107px，鼠标一动地图就大幅晃动）
+const PARALLAX_AMP = 0.018
 
 // IP 定位（全部 https，避开 Mixed Content；ip-api 的 https 端点 403 已弃用）
 const GEO_PRIMARY = 'https://ipwho.is/'
@@ -190,23 +202,43 @@ async function loadRegionImage(
   lat: number,
   lon: number,
 ): Promise<{ texture: any; uvOffset: [number, number]; uvScale: [number, number] } | null> {
+  // 高纬度修正：经线在高纬收敛，同样的相机距离下屏幕横向对应的
+  // 经度跨度会按 1/cos(lat) 放大（60°N 可见约 28 度）。
+  // 若固定 14 度，高纬用户就只能看到中间一半清晰。
+  //
+  // 分辨率策略分两档：
+  //   中低纬（factor≈1）：2560px / 14 度 = 183 px/度，与屏幕 1:1
+  //   高纬（factor>1）  ：固定约 2400px 宽，宁可密度降一些，
+  //                        也要保证「整个可见范围都清晰」而不是只有中间清楚。
+  //                        实测 25 度 @2400px ≈ 1.2MB、96 px/度，体积可控。
+  // 上限 2.9（约 40 度）：70°N 的实际可见经度约 41 度，取 2.9 能覆盖到 ~90%。
+  // 高纬分辨率本来就走 2400px 固定宽度，跨度越宽密度越低，但体积不变。
+  const latFactor = Math.min(2.9, 1 / Math.max(0.35, Math.cos((lat * Math.PI) / 180)))
+  const spanLon = REGION_LON_SPAN * latFactor
+  const spanLat = REGION_LAT_SPAN * latFactor
+  const imgW =
+    latFactor <= 1.001
+      ? REGION_WIDTH // 中低纬：保持与屏幕 1:1
+      : 2400 // 高纬：固定像素宽度，换取更大覆盖范围
+  const imgH = Math.round(imgW * (spanLat / spanLon))
+
   // 区域中心尽量贴合访客位置，但要做两类边界处理：
   //  1) 跨越 ±180° 经线：把 lon0 拉回 [-180, 180] 内
   //  2) 超出南北极：把 lat0 夹到 [-90+span, 90-span]
   // 注意：跨越经线时贴图会被裁掉一部分（等距柱状图的固有特性），
   // 访客在太平洋中部时会发生，属可接受退化。
-  let lon0 = lon - REGION_LON_SPAN / 2
-  let lat0 = lat - REGION_LAT_SPAN / 2
+  let lon0 = lon - spanLon / 2
+  let lat0 = lat - spanLat / 2
   if (lon0 < -180) lon0 += 360
-  if (lon0 + REGION_LON_SPAN > 180) lon0 = 180 - REGION_LON_SPAN
-  lat0 = Math.max(-90 + REGION_LAT_SPAN / 2, Math.min(90 - REGION_LAT_SPAN / 2, lat0))
+  if (lon0 + spanLon > 180) lon0 = 180 - spanLon
+  lat0 = Math.max(-90 + spanLat / 2, Math.min(90 - spanLat / 2, lat0))
 
   // bbox 是「minLon,minLat,maxLon,maxLat」
-  const bbox = `${lon0},${lat0},${lon0 + REGION_LON_SPAN},${lat0 + REGION_LAT_SPAN}`
+  const bbox = `${lon0},${lat0},${lon0 + spanLon},${lat0 + spanLat}`
   const url =
     `${ARCGIS_EXPORT}?bbox=${bbox}` +
     `&bboxSR=4326&imageSR=4326` +
-    `&size=${REGION_WIDTH},${REGION_HEIGHT}` +
+    `&size=${imgW},${imgH}` +
     `&format=jpg&f=image`
 
   try {
@@ -222,7 +254,7 @@ async function loadRegionImage(
     return {
       texture: tex,
       uvOffset: [u0, v0],
-      uvScale: [REGION_LON_SPAN / 360, REGION_LAT_SPAN / 180],
+      uvScale: [spanLon / 360, spanLat / 180],
     }
   } catch {
     return null
@@ -1128,9 +1160,13 @@ onMounted(() => {
       ;(earthMat.uniforms.sunDir as any).value.copy(sunVec)
       sunLight.position.copy(sunVec).multiplyScalar(5)
 
-      // 视差：相机随鼠标轻微位移（不影响聚焦）
-      camera.position.x += (mouse.x * 0.08 - camera.position.x) * 0.03
-      camera.position.y += (-mouse.y * 0.08 - camera.position.y) * 0.03
+      // 视差：相机随鼠标轻微位移（不影响聚焦）。
+      // 幅度必须按「屏幕上多少像素」来定，不能靠拍脑袋。
+      // 在 d≈1.14 的缩放下，1 世界单位 ≈ 1340 屏幕像素，
+      // 原来的 0.08 振幅 = 单边 107px 位移，鼠标一动地图就大幅晃动。
+      // PARALLAX_AMP = 0.018 -> 单边约 24px，是"轻微跟随"的量级。
+      camera.position.x += (mouse.x * PARALLAX_AMP - camera.position.x) * 0.03
+      camera.position.y += (-mouse.y * PARALLAX_AMP - camera.position.y) * 0.03
       camera.lookAt(0, 0, 0)
 
       renderer.render(scene, camera)
