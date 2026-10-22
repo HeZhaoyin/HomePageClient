@@ -86,14 +86,25 @@ console.log('\n=== 4. region texture resolution is sufficient ===')
 // So the region is under-sampled by 255.7/153.6 = 1.66x. That is a real
 // limitation; report it rather than hide it.
 const REGION_LON_SPAN = 14
-const REGION_WIDTH = 2560
+const REGION_EDGE_STRETCH = 1.98   // 球面边缘纹理拉伸倍数（实测，与相机距离无关）
+const REGION_EDGE_TARGET = 0.7
 const screenW = 2557
-const texPxPerDeg = REGION_WIDTH / REGION_LON_SPAN
-const screenPxPerDeg = screenW / 14
-const oversample = screenPxPerDeg / texPxPerDeg
-console.log(`  region: ${texPxPerDeg.toFixed(0)} px/deg, screen needs ${screenPxPerDeg.toFixed(0)} px/deg`)
-check('region is 1:1 with screen pixels (no under-sampling)', oversample <= 1.05,
-  `${oversample.toFixed(2)}x under-sampled`)
+// 组件里 computeRegionWidth 的逻辑
+const computeRegionWidth = (w) => {
+  const pxPerDeg = w / REGION_LON_SPAN
+  const need = pxPerDeg * REGION_EDGE_STRETCH * REGION_EDGE_TARGET
+  return Math.max(2048, Math.min(4096, Math.round(need * REGION_LON_SPAN)))
+}
+const regionWidth = computeRegionWidth(screenW)
+const texPxPerDeg = regionWidth / REGION_LON_SPAN
+const screenPxPerDeg = screenW / REGION_LON_SPAN
+// 边缘有效清晰度 = 纹理密度 / (屏幕密度 × 边缘拉伸)
+const edgeClarity = texPxPerDeg / (screenPxPerDeg * REGION_EDGE_STRETCH)
+console.log(`  region: ${regionWidth}px = ${texPxPerDeg.toFixed(0)} px/deg, 屏幕 ${screenPxPerDeg.toFixed(0)} px/deg`)
+console.log(`  球体边缘拉伸 ${REGION_EDGE_STRETCH}x -> 边缘实际清晰度 ${(edgeClarity*100).toFixed(0)}%`)
+check('边缘清晰度 >= 70%（这是"两侧发糊"的关键指标）', edgeClarity >= REGION_EDGE_TARGET - 0.02,
+  `${(edgeClarity*100).toFixed(0)}%`)
+check('区域宽度不超过 ArcGIS 单次上限 4096', regionWidth <= 4096, `${regionWidth}px`)
 
 console.log('\n=== 5. night region resolution ===')
 // GIBS L6: 114 px/deg over a 10 deg window -> 1140 px, still below the

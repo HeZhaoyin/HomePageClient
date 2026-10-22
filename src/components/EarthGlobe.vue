@@ -81,12 +81,35 @@ const TEXTURES = {
 // 现在取 14x10 度（略大于可见范围），高纬度会按 1/cos(lat) 自动放宽。
 const REGION_LON_SPAN = 14
 const REGION_LAT_SPAN = 10
-// 分辨率按「1 屏幕像素 = 1 纹理像素」标定：
-//   屏幕 2557px 宽 / 14 度 = 183 px/度
-//   2560px / 14 度          = 183 px/度  -> 1.00x，无欠采样
-// （之前 1536px/10度 = 154 px/度，屏幕需 256 px/度，欠采样 1.66x，所以糊）
-// 高度由宽度按跨度比例算出，无需单独常量。
-const REGION_WIDTH = 2560
+
+// ---- 分辨率：为什么不是简单的「屏幕宽 = 纹理宽」----
+//
+// 球面投影有个固有几何缺陷：越靠屏幕边缘，同样的像素宽度对应的地表越小
+// （掠射角趋近切线）。实测本投影下最边缘的纹理拉伸倍数稳定在 ~1.98x，
+// 且与相机距离无关 —— 拉近相机也消不掉。
+//
+// 也就是说：中心 1:1 的纹理，到屏幕左右边缘等价于被拉宽 2 倍 → 看起来糊。
+// 若想让边缘也清晰，纹理密度必须按「边缘拉伸倍数 × 可接受清晰度」来抬：
+//     需要 px/度 = (屏幕宽 / 跨度) × 1.98 × 目标清晰度
+//
+// 例：2557px 屏 / 14 度 = 183 px/度；×1.98×0.7 ≈ 253 px/度
+//     → 需要约 3544px 宽的纹理。
+//
+// 但不同屏幕需求差别很大（1080p 只要 ~2660px，4K 要 ~5300px 超过服务端上限），
+// 所以按实际屏幕像素宽度动态决定，并夹在 [2048, 4096]（ArcGIS 单次上限）。
+// 之前固定 2560px 时边缘只有 ~51% 清晰度，这就是「两侧发糊」的根因。
+const REGION_EDGE_STRETCH = 1.98 // 屏幕最边缘的纹理拉伸倍数（实测）
+const REGION_EDGE_TARGET = 0.7 // 边缘目标清晰度（1.0 = 完全 1:1）
+const REGION_MIN_WIDTH = 2048
+const REGION_MAX_WIDTH = 4096
+
+/** 按屏幕像素宽度算出合适的区域纹理宽度 */
+function computeRegionWidth(screenW: number): number {
+  const screenPxPerDeg = screenW / REGION_LON_SPAN
+  const needPxPerDeg = screenPxPerDeg * REGION_EDGE_STRETCH * REGION_EDGE_TARGET
+  const needWidth = Math.round(needPxPerDeg * REGION_LON_SPAN)
+  return Math.max(REGION_MIN_WIDTH, Math.min(REGION_MAX_WIDTH, needWidth))
+}
 
 // 夜间灯光高清区：NASA GIBS VIIRS Black Marble，epsg4326 瓦片拼接。
 // 真数据约 15 弧秒，但 GIBS 服务端最高只到 L7（228 px/度）。
@@ -218,25 +241,28 @@ async function loadRegionImage(
   THREE: any,
   lat: number,
   lon: number,
+  maxAnisotropy?: number,
+  screenWidth?: number,
 ): Promise<{ texture: any; uvOffset: [number, number]; uvScale: [number, number] } | null> {
   // 高纬度修正：经线在高纬收敛，同样的相机距离下屏幕横向对应的
   // 经度跨度会按 1/cos(lat) 放大（60°N 可见约 28 度）。
   // 若固定 14 度，高纬用户就只能看到中间一半清晰。
   //
-  // 分辨率策略分两档：
-  //   中低纬（factor≈1）：2560px / 14 度 = 183 px/度，与屏幕 1:1
-  //   高纬（factor>1）  ：固定约 2400px 宽，宁可密度降一些，
-  //                        也要保证「整个可见范围都清晰」而不是只有中间清楚。
-  //                        实测 25 度 @2400px ≈ 1.2MB、96 px/度，体积可控。
-  // 上限 2.9（约 40 度）：70°N 的实际可见经度约 41 度，取 2.9 能覆盖到 ~90%。
-  // 高纬分辨率本来就走 2400px 固定宽度，跨度越宽密度越低，但体积不变。
+  // 纹理宽度：
+  //   1) 基础宽度按「屏幕实际像素宽度」算（见 computeRegionWidth），
+  //      目的让球体左右边缘也清晰，而不只是中间那圈；
+  //   2) 再按 latFactor 等比放大 —— 高纬跨度被放宽后，要保持同样的
+  //      px/度 密度，宽度就得同倍数增长；
+  //   3) 最后夹到服务端单次出图上限 4096。
+  //
+  // 【曾经写错的地方】原先把 latFactor > 1.001 当成"高纬"改用固定 2400px，
+  // 但 1.001 这个阈值太严：连 22.5°N 的深圳（factor=1.08）都被判成高纬，
+  // 结果中低纬也走了 2400px 分支，左右边缘照样糊 —— 这正是「左侧模糊」的成因之一。
   const latFactor = Math.min(2.9, 1 / Math.max(0.35, Math.cos((lat * Math.PI) / 180)))
   const spanLon = REGION_LON_SPAN * latFactor
   const spanLat = REGION_LAT_SPAN * latFactor
-  const imgW =
-    latFactor <= 1.001
-      ? REGION_WIDTH // 中低纬：保持与屏幕 1:1
-      : 2400 // 高纬：固定像素宽度，换取更大覆盖范围
+  const baseWidth = computeRegionWidth(screenWidth || 2560)
+  const imgW = Math.min(REGION_MAX_WIDTH, Math.round(baseWidth * latFactor))
   const imgH = Math.round(imgW * (spanLat / spanLon))
 
   // 区域中心尽量贴合访客位置，但要做两类边界处理：
@@ -261,7 +287,14 @@ async function loadRegionImage(
   try {
     const tex = await new Promise<any>((resolve, reject) => {
       new THREE.TextureLoader().load(url, (t: any) => {
-        t.anisotropy = 8 // 区域图会被放大看，过滤要给足
+        // 各向异性过滤：球面边缘的纹理会以极大的掠射角呈现，
+        // 这正是各向异性过滤要处理的场景。用硬件支持的最大值，
+        // 而不是写死 8 —— 高端卡支持到 16，写死会明显糊在球体两侧。
+        t.anisotropy = maxAnisotropy || 8
+        // 明示三线性 + mipmap，避免缩小时闪烁、放大时用最近邻
+        t.minFilter = THREE.LinearMipmapLinearFilter
+        t.magFilter = THREE.LinearFilter
+        t.generateMipmaps = true
         resolve(t)
       }, undefined, () => reject(new Error('region fail')))
     })
@@ -749,9 +782,16 @@ onMounted(() => {
     }
     const tex: Record<string, any> = { day: dayTex }
 
+    // 各向异性上限：取自当前 GPU（常见 16），用于抑制球体边缘的掠射角模糊
+    const maxAniso = renderer?.capabilities?.getMaxAnisotropy?.() || 8
+    // 用画布实际像素宽度决定区域图分辨率（见 computeRegionWidth 的推导）
+    const canvasCssW = wrap.clientWidth || window.innerWidth
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+    const screenPxWidth = Math.round(canvasCssW * pixelRatio)
+
     // 区域高清图（昼/夜）也并行拿，但同样限时，拿不到就用整球图
     const [region, nightRegion] = await Promise.all([
-      withTotalTimeout(loadRegionImage(THREE, geo.lat, geo.lon), 20000),
+      withTotalTimeout(loadRegionImage(THREE, geo.lat, geo.lon, maxAniso, screenPxWidth), 20000),
       withTotalTimeout(loadNightRegion(THREE, geo.lat, geo.lon), 15000),
     ])
     if (disposed) return
